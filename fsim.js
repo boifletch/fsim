@@ -3,12 +3,12 @@
   const canvas = document.getElementById('fire');
   const ctx = canvas.getContext('2d', { alpha: false });
   const TAU = Math.PI * 2;
-  const COUNT = 28, MAX_PARTICLES = 2600, STEP = 1 / 60;
+  const MAX_PARTICLES = 2600, STEP = 1 / 60;
   const AMBIENT = 20, IGNITION = 290, BURN_TEMP = 820;
   let width = 1, height = 1, dpr = 1, logs = [], particles = [];
   let drag = null, activePointer = null, offsetX = 0, offsetY = 0;
   let last = 0, accumulator = 0;
-  const delta = new Float64Array(COUNT);
+  let delta = new Float64Array(0);
   const random = (a, b) => a + Math.random() * (b - a);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -29,31 +29,31 @@
     log.y = height < ey * 2 ? height / 2 : clamp(log.y, ey, height - ey);
   }
 
+  function createLog(x, y, burning) {
+    const angle = random(0, TAU);
+    const log = {
+      x, y,
+      ux: Math.cos(angle), uy: Math.sin(angle), angle,
+      half: random(52, 96), r: random(16, 24),
+      temp: AMBIENT, fuel: 1, burning, emission: 0,
+      grain: Array.from({ length: 7 }, () => [random(-0.85, 0.6), random(-0.7, 0.7), random(0.1, 0.7)])
+    };
+    if (burning) {
+      log.burning = true;
+      log.temp = BURN_TEMP;
+    }
+    constrain(log);
+    logs.push(log);
+    return log;
+  }
+
   function reset() {
     drag = null;
     activePointer = null;
     canvas.classList.remove('dragging');
     particles.length = 0;
     logs = [];
-    const scale = Math.min(1, width / 700, height / 550);
-    const spread = Math.min(width, height) * 0.34;
-    for (let i = 0; i < COUNT; i++) {
-      const angle = random(0, TAU), a = random(0, TAU);
-      const distance = Math.sqrt(Math.random()) * spread;
-      const log = {
-        x: width / 2 + Math.cos(a) * distance,
-        y: height * 0.56 + Math.sin(a) * distance,
-        ux: Math.cos(angle), uy: Math.sin(angle), angle,
-        half: random(26, 48) * scale, r: random(8, 12) * scale,
-        temp: AMBIENT, fuel: 1, burning: false, emission: 0,
-        grain: Array.from({ length: 7 }, () => [random(-0.85, 0.6), random(-0.7, 0.7), random(0.1, 0.7)])
-      };
-      constrain(log);
-      logs.push(log);
-    }
-    const starter = logs[Math.floor(Math.random() * logs.length)];
-    starter.burning = true;
-    starter.temp = BURN_TEMP;
+    createLog(width / 2, height * 0.56, true);
     accumulator = 0;
   }
 
@@ -82,6 +82,7 @@
   }
 
   function update(dt) {
+    if (delta.length !== logs.length) delta = new Float64Array(logs.length);
     delta.fill(0);
     for (let i = 0; i < logs.length; i++) {
       for (let j = i + 1; j < logs.length; j++) {
@@ -221,8 +222,9 @@
       logs.splice(i, 1); logs.push(log);
       canvas.setPointerCapture(e.pointerId);
       canvas.classList.add('dragging');
-      break;
+      return;
     }
+    createLog(e.clientX, e.clientY, false);
   });
   canvas.addEventListener('pointermove', e => {
     if (!drag || e.pointerId !== activePointer) return;
