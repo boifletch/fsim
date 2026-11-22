@@ -5,8 +5,9 @@
   const TAU = Math.PI * 2;
   const STEP = 1 / 60;
   const CELL = 40;
-  const CELL_INFLUENCE = CELL * 1.6;
+  const CELL_INFLUENCE = CELL * 2.5;
   const BUCKET = CELL * 2;
+  const BUCKET_RADIUS = Math.ceil(CELL_INFLUENCE / BUCKET);
   const MAX_LOG_PARTICLES = 96;
   const MAX_PARTICLES = 5200;
   const AMBIENT = 20,
@@ -157,8 +158,8 @@
         cellWorld(log, cellIndex, position);
         const baseX = Math.floor(position.x / BUCKET);
         const baseY = Math.floor(position.y / BUCKET);
-        for (let bucketY = baseY - 1; bucketY <= baseY + 1; bucketY++) {
-          for (let bucketX = baseX - 1; bucketX <= baseX + 1; bucketX++) {
+        for (let bucketY = baseY - BUCKET_RADIUS; bucketY <= baseY + BUCKET_RADIUS; bucketY++) {
+          for (let bucketX = baseX - BUCKET_RADIUS; bucketX <= baseX + BUCKET_RADIUS; bucketX++) {
             const bucket = cellsByBucket.get(
               bucketKey(bucketX * BUCKET, bucketY * BUCKET),
             );
@@ -176,7 +177,7 @@
               const coupling =
                 separation <= CELL * 0.05
                   ? 1
-                  : 0.35 * Math.exp(-separation / CELL);
+                  : 0.8 * Math.exp(-separation / (CELL * 1.5));
               const heat =
                 (temperature - otherLog.temp[otherCell]) * coupling * dt;
               log.delta[cellIndex] -= heat;
@@ -196,7 +197,7 @@
   }
 
   function conduct(log, a, b, dt) {
-    const heat = (log.temp[a] - log.temp[b]) * 1.1 * dt;
+    const heat = (log.temp[a] - log.temp[b]) * 0.35 * dt;
     log.delta[a] -= heat;
     log.delta[b] += heat;
   }
