@@ -170,6 +170,18 @@
       }
       ctx.fillStyle = `rgb(${Math.round(142 - char * 106)},${Math.round(98 - char * 73)},${Math.round(57 - char * 42)})`;
       ctx.beginPath(); ctx.ellipse(log.half, 0, log.r * 0.45, log.r * 0.83, 0, 0, TAU); ctx.fill();
+
+      const ignition = log.burning ? 1 : clamp((log.temp - AMBIENT) / (IGNITION - AMBIENT), 0, 1);
+      const label = log.burning ? 'BURN' : `${Math.round(ignition * 100)}%`;
+      const fontSize = Math.max(7, log.r * 0.72);
+      ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = Math.max(2, fontSize * 0.22);
+      ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+      ctx.strokeText(label, 0, 0);
+      ctx.fillStyle = log.burning ? '#ffd27a' : `rgba(255,${Math.round(190 - ignition * 110)},${Math.round(170 - ignition * 150)},${0.35 + ignition * 0.55})`;
+      ctx.fillText(label, 0, 0);
       ctx.restore();
     }
     ctx.globalCompositeOperation = 'lighter';
