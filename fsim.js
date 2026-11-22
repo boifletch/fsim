@@ -2,8 +2,11 @@
 (() => {
   const canvas = document.getElementById("fire");
   const ctx = canvas.getContext("2d", { alpha: false });
+  const scoreElement = document.getElementById("score");
+  const incomeElement = document.getElementById("income");
   const TAU = Math.PI * 2;
-  const STEP = 1 / 60;
+  const FPS = 60;
+  const STEP = 1 / FPS;
   const CELL = 40;
   const CELL_INFLUENCE = CELL * 2.5;
   const BUCKET = CELL * 2;
@@ -11,12 +14,15 @@
   const MAX_LOG_PARTICLES = 96;
   const MAX_PARTICLES = 2600;
   const MAX_HEARTH_LOGS = 8;
+  const BASE_LOG_OUTPUT = 1.8;
+  const TEMP_LOG_RECHARGE_SECONDS = 20;
   const AMBIENT = 20;
   const IGNITION = 290;
   const BURN_TEMP = 820;
   let width = 1;
   let height = 1;
   let dpr = 1;
+  let score = 0;
   let particles = [];
   let drag = null;
   let activePointer = null;
@@ -27,7 +33,8 @@
   let cellsByBucket = new Map();
 
   class Log {
-    constructor(x, y, angle, burning = false) {
+    constructor(type, x, y, angle, burning = false) {
+      this.type = type;
       this.x = x;
       this.y = y;
       this.angle = angle;
@@ -44,6 +51,34 @@
       this.particleCount = 0;
       this.updateBasis();
       if (burning) this.ignite(2);
+    }
+
+    get burningCellCount() {
+      let count = 0;
+      for (let cell = 0; cell < this.count; cell++) {
+        if (this.burning[cell]) count++;
+      }
+      return count;
+    }
+
+    get outputPerSecond() {
+      return BASE_LOG_OUTPUT * (this.burningCellCount / this.count);
+    }
+
+    get isDepleted() {
+      for (let cell = 0; cell < this.count; cell++) {
+        if (this.fuel[cell] > 0) return false;
+      }
+      return true;
+    }
+
+    recharge() {
+      this.temp.fill(AMBIENT);
+      this.delta.fill(0);
+      this.fuel.fill(1);
+      this.burning.fill(0);
+      this.emission.fill(0);
+      this.particleCount = 0;
     }
 
     updateBasis() {
@@ -124,7 +159,9 @@
           this.burning[cell] = 1;
         }
         if (this.burning[cell]) {
-          this.fuel[cell] = Math.max(0, this.fuel[cell] - dt / 100);
+          if (this.type === "temporary") {
+            this.fuel[cell] = Math.max(0, this.fuel[cell] - dt / 100);
+          }
           if (this.fuel[cell] === 0 || temperature < 190) {
             this.burning[cell] = 0;
           } else {
@@ -170,7 +207,7 @@
       let ignited = 0;
       for (let cell = 0; cell < this.count; cell++) {
         const temperature = this.temp[cell];
-        const char = 1 - this.fuel[cell];
+        const char = this.type === "persistent" ? 0 : 1 - this.fuel[cell];
         const hot = Math.max(0, Math.min(1, (temperature - 170) / 650));
         if (this.burning[cell]) ignited++;
         context.fillStyle = `rgb(${Math.round(97 - char * 67 + hot * 65)},${Math.round(60 - char * 40)},${Math.round(34 - char * 23)})`;
@@ -206,6 +243,7 @@
   class Hearth {
     constructor() {
       this.logs = [];
+      this.rechargingLogs = [];
       this.width = 0;
       this.height = 0;
     }
@@ -218,22 +256,29 @@
       return this.logs.length < MAX_HEARTH_LOGS;
     }
 
+    get incomePerSecond() {
+      let income = 0;
+      for (const log of this.logs) income += log.outputPerSecond;
+      return income;
+    }
+
     resize(width, height) {
       this.width = width;
       this.height = height;
       for (const log of this.logs) log.constrain();
     }
 
-    addLog(burning = false) {
+    addLog(type = "temporary", burning = false) {
       if (!this.canAcceptLog) return null;
       const angle = Math.PI / 2 - Math.random() * (Math.PI / 4);
-      const log = new Log(this.width / 2, this.height / 2, angle, burning);
+      const log = new Log(type, this.width / 2, this.height / 2, angle, burning);
       this.logs.push(log);
       return log;
     }
 
     clear() {
       this.logs.length = 0;
+      this.rechargingLogs.length = 0;
     }
 
     buildCellIndex() {
@@ -292,6 +337,22 @@
       this.buildCellIndex();
       this.transferHeat(dt);
       for (const log of this.logs) log.update(dt);
+
+      for (let index = this.logs.length - 1; index >= 0; index--) {
+        const log = this.logs[index];
+        if (log.type !== "temporary" || !log.isDepleted) continue;
+        this.logs.splice(index, 1);
+        this.rechargingLogs.push({ log, remaining: TEMP_LOG_RECHARGE_SECONDS });
+      }
+
+      for (let index = this.rechargingLogs.length - 1; index >= 0; index--) {
+        const entry = this.rechargingLogs[index];
+        entry.remaining -= dt;
+        if (entry.remaining > 0) continue;
+        this.rechargingLogs.splice(index, 1);
+        entry.log.recharge();
+        if (this.canAcceptLog) this.logs.push(entry.log);
+      }
     }
 
     emit(dt) {
@@ -334,7 +395,7 @@
   window.addEventListener("resize", resize);
   document.getElementById("reset").addEventListener("click", reset);
   document.getElementById("add-log").addEventListener("click", () => {
-    hearth.addLog(false);
+    hearth.addLog("temporary", false);
   });
   document.addEventListener("visibilitychange", () => {
     last = 0;
@@ -354,8 +415,9 @@
     activePointer = null;
     canvas.classList.remove("dragging");
     particles.length = 0;
+    score = 0;
     hearth.clear();
-    hearth.addLog(true);
+    hearth.addLog("persistent", true);
     accumulator = 0;
   }
 
@@ -363,6 +425,7 @@
     hearth.update(dt);
     hearth.emit(dt);
     updateParticles(dt);
+    score += hearth.incomePerSecond * dt;
   }
 
   function updateParticles(dt) {
@@ -379,6 +442,11 @@
       particle.y += particle.vy * dt;
       particle.vy -= 18 * dt;
     }
+  }
+
+  function updateHud() {
+    scoreElement.textContent = Math.floor(score).toLocaleString();
+    incomeElement.textContent = `${hearth.incomePerSecond.toFixed(2)} / sec`;
   }
 
   function onClicked(event) {
@@ -437,6 +505,7 @@
       ctx.fillRect(particle.x - radius, particle.y - radius, radius * 2, radius * 2);
     }
     ctx.globalCompositeOperation = "source-over";
+    updateHud();
   }
 
   function resize() {
