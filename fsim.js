@@ -172,16 +172,17 @@
       ctx.beginPath(); ctx.ellipse(log.half, 0, log.r * 0.45, log.r * 0.83, 0, 0, TAU); ctx.fill();
 
       const ignition = log.burning ? 1 : clamp((log.temp - AMBIENT) / (IGNITION - AMBIENT), 0, 1);
-      const label = log.burning ? 'BURN' : `${Math.round(ignition * 100)}%`;
-      const fontSize = Math.max(7, log.r * 0.72);
-      ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.lineWidth = Math.max(2, fontSize * 0.22);
-      ctx.strokeStyle = 'rgba(0,0,0,0.65)';
-      ctx.strokeText(label, 0, 0);
-      ctx.fillStyle = log.burning ? '#ffd27a' : `rgba(255,${Math.round(190 - ignition * 110)},${Math.round(170 - ignition * 150)},${0.35 + ignition * 0.55})`;
-      ctx.fillText(label, 0, 0);
+      const visibility = 4 * ignition * (1 - ignition);
+      if (visibility > 0.001) {
+        const outline = log.r * 0.45 * ignition + 0.5;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.lineWidth = outline;
+        ctx.strokeStyle = `rgba(255,${Math.round(190 - ignition * 115)},${Math.round(150 - ignition * 135)},${visibility * 0.9})`;
+        ctx.beginPath();
+        ctx.roundRect(-log.half - outline * 0.5, -log.r - outline * 0.5, log.half * 2 + outline, log.r * 2 + outline, log.r + outline * 0.5);
+        ctx.stroke();
+      }
       ctx.restore();
     }
     ctx.globalCompositeOperation = 'lighter';
