@@ -185,7 +185,7 @@
         ctx.stroke();
       }
 
-      const label = log.burning ? 'BURN' : `${Math.round(ignition * 100)}%`;
+      const label = log.burning ? 'BURN' : `${Math.round(ignition * 100)}% / F:${log.fuel}`;
       const fontSize = Math.max(7, log.r * 0.72);
       ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
       ctx.textAlign = 'center';
