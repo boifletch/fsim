@@ -4,11 +4,11 @@
   const ctx = canvas.getContext("2d", { alpha: false });
   const TAU = Math.PI * 2;
   const STEP = 1 / 60;
-  const CELL = 9;
+  const CELL = 40;
   const CELL_INFLUENCE = CELL * 1.6;
   const BUCKET = 16;
   const MAX_LOG_PARTICLES = 96;
-  const MAX_PARTICLES = 2600;
+  const MAX_PARTICLES = 5200;
   const AMBIENT = 20,
     IGNITION = 290,
     BURN_TEMP = 820;
@@ -26,7 +26,7 @@
   let cellsByBucket = new Map();
 
   canvas.addEventListener("pointerdown", clicked);
-  canvas.addEventListener("pointermove", (e) => {
+  canvas.addEventListener("pointermove", e => {
     if (!drag || e.pointerId !== activePointer) return;
     drag.x = e.clientX + offsetX;
     drag.y = e.clientY + offsetY;
@@ -49,7 +49,9 @@
   // Utilities
 
   function bucketKey(x, y) {
-    return (Math.floor(x / BUCKET) + 4096) * 8192 + (Math.floor(y / BUCKET) + 4096);
+    return (
+      (Math.floor(x / BUCKET) + 4096) * 8192 + (Math.floor(y / BUCKET) + 4096)
+    );
   }
 
   function cellWorld(log, index, out) {
@@ -99,9 +101,11 @@
       particleCount: 0,
     };
     if (burning) {
-      const starter = randomInt(0, count - 1);
-      log.burning[starter] = 1;
-      log.temp[starter] = BURN_TEMP;
+      for (let i = 0; i < 2; i++) {
+        const starter = randomInt(0, count - 1);
+        log.burning[starter] = 1;
+        log.temp[starter] = BURN_TEMP;
+      }
     }
     constrain(log);
     logs.push(log);
@@ -156,7 +160,9 @@
         const baseY = Math.floor(position.y / BUCKET);
         for (let bucketY = baseY - 1; bucketY <= baseY + 1; bucketY++) {
           for (let bucketX = baseX - 1; bucketX <= baseX + 1; bucketX++) {
-            const bucket = cellsByBucket.get(bucketKey(bucketX * BUCKET, bucketY * BUCKET));
+            const bucket = cellsByBucket.get(
+              bucketKey(bucketX * BUCKET, bucketY * BUCKET),
+            );
             if (!bucket) continue;
             for (let entry = 0; entry < bucket.length; entry += 4) {
               const otherLogIndex = bucket[entry];
@@ -172,7 +178,8 @@
                 separation <= CELL * 0.05
                   ? 1
                   : 0.35 * Math.exp(-separation / CELL);
-              const heat = (temperature - otherLog.temp[otherCell]) * coupling * dt;
+              const heat =
+                (temperature - otherLog.temp[otherCell]) * coupling * dt;
               log.delta[cellIndex] -= heat;
               otherLog.delta[otherCell] += heat;
             }
@@ -183,7 +190,8 @@
         const row = (cellIndex / log.cols) | 0;
         const column = cellIndex % log.cols;
         if (column + 1 < log.cols) conduct(log, cellIndex, cellIndex + 1, dt);
-        if (row + 1 < log.rows) conduct(log, cellIndex, cellIndex + log.cols, dt);
+        if (row + 1 < log.rows)
+          conduct(log, cellIndex, cellIndex + log.cols, dt);
       }
     }
   }
@@ -200,7 +208,11 @@
       for (let cellIndex = 0; cellIndex < log.count; cellIndex++) {
         let temperature = log.temp[cellIndex] + log.delta[cellIndex];
         temperature -= (temperature - AMBIENT) * 0.075 * dt;
-        if (!log.burning[cellIndex] && log.fuel[cellIndex] > 0 && temperature >= IGNITION)
+        if (
+          !log.burning[cellIndex] &&
+          log.fuel[cellIndex] > 0 &&
+          temperature >= IGNITION
+        )
           log.burning[cellIndex] = 1;
         if (log.burning[cellIndex]) {
           log.fuel[cellIndex] = Math.max(0, log.fuel[cellIndex] - dt / 100);
@@ -255,7 +267,8 @@
         particles.pop();
         continue;
       }
-      particle.x += (particle.vx + Math.sin(particle.age * 9 + particle.phase) * 14) * dt;
+      particle.x +=
+        (particle.vx + Math.sin(particle.age * 9 + particle.phase) * 14) * dt;
       particle.y += particle.vy * dt;
       particle.vy -= 18 * dt;
     }
@@ -306,8 +319,12 @@
   function constrain(log) {
     const extentX = Math.abs(log.ux) * log.halfW + Math.abs(log.uy) * log.halfH;
     const extentY = Math.abs(log.ux) * log.halfH + Math.abs(log.uy) * log.halfW;
-    log.x = width < extentX * 2 ? width / 2 : clamp(log.x, extentX, width - extentX);
-    log.y = height < extentY * 2 ? height / 2 : clamp(log.y, extentY, height - extentY);
+    log.x =
+      width < extentX * 2 ? width / 2 : clamp(log.x, extentX, width - extentX);
+    log.y =
+      height < extentY * 2
+        ? height / 2
+        : clamp(log.y, extentY, height - extentY);
   }
 
   function render() {
@@ -322,7 +339,14 @@
       if (average < 110) continue;
       const strength = clamp((average - 110) / 710, 0, 1);
       const radius = Math.max(log.halfW, log.halfH) + 85;
-      const glow = ctx.createRadialGradient(log.x, log.y, 0, log.x, log.y, radius);
+      const glow = ctx.createRadialGradient(
+        log.x,
+        log.y,
+        0,
+        log.x,
+        log.y,
+        radius,
+      );
       glow.addColorStop(0, `rgba(255,85,12,${strength * 0.2})`);
       glow.addColorStop(1, "rgba(255,45,0,0)");
       ctx.fillStyle = glow;
@@ -373,18 +397,6 @@
         ctx.stroke();
       }
 
-      const label =
-        (burning ? "BURN" : `${Math.round(ignition * 100)}%`) +
-        ` / F:${fuel.toFixed(2)}`;
-      const fontSize = 10;
-      ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.lineWidth = 2;
-      ctx.strokeStyle = "rgba(0,0,0,0.65)";
-      ctx.strokeText(label, 0, 0);
-      ctx.fillStyle = burning ? "#ffd27a" : `rgba(255,${Math.round(190 - ignition * 110)},${Math.round(170 - ignition * 150)},${0.35 + ignition * 0.55})`;
-      ctx.fillText(label, 0, 0);
       ctx.restore();
     }
 
@@ -392,7 +404,14 @@
     for (const particle of particles) {
       const t = particle.age / particle.life,
         radius = particle.size * (1 - t) + 0.5;
-      const flame = ctx.createRadialGradient(particle.x, particle.y, 0, particle.x, particle.y, radius);
+      const flame = ctx.createRadialGradient(
+        particle.x,
+        particle.y,
+        0,
+        particle.x,
+        particle.y,
+        radius,
+      );
       flame.addColorStop(
         0,
         `rgba(255,${Math.round(220 - 110 * t)},65,${(1 - t) * 0.85})`,
@@ -403,7 +422,12 @@
       );
       flame.addColorStop(1, "rgba(180,15,0,0)");
       ctx.fillStyle = flame;
-      ctx.fillRect(particle.x - radius, particle.y - radius, radius * 2, radius * 2);
+      ctx.fillRect(
+        particle.x - radius,
+        particle.y - radius,
+        radius * 2,
+        radius * 2,
+      );
     }
     ctx.globalCompositeOperation = "source-over";
   }
