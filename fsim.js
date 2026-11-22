@@ -20,8 +20,6 @@
   let last = 0,
     accumulator = 0;
   let delta = new Float64Array(0);
-  const random = (a, b) => a + Math.random() * (b - a);
-  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
   canvas.addEventListener("pointerdown", clicked);
   canvas.addEventListener("pointermove", (e) => {
@@ -43,6 +41,10 @@
   resize();
   reset();
   requestAnimationFrame(frame);
+
+  function clamp(value, min, max) {
+    return Math.max(min, Math.min(max, value));
+  }
 
   function clicked(e) {
     if (activePointer !== null || e.button !== 0) return;
@@ -72,6 +74,7 @@
     }
     createLog(e.clientX, e.clientY, false);
   }
+
   function constrain(log) {
     const ex = Math.abs(log.ux) * log.half + log.r;
     const ey = Math.abs(log.uy) * log.half + log.r;
@@ -107,6 +110,7 @@
     logs.push(log);
     return log;
   }
+
   function frame(time) {
     const elapsed = last ? Math.min((time - last) / 1000, 0.1) : 0;
     last = time;
@@ -160,6 +164,10 @@
       1,
     );
     return Math.hypot(px - ax - t * dx, py - ay - t * dy);
+  }
+
+  function random(min, max) {
+    return min + Math.random() * (max - min);
   }
 
   function release(e) {
