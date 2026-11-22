@@ -419,24 +419,24 @@
   }
 
   function render() {
-    context.globalCompositeOperation = "source-over";
-    context.fillStyle = "#090b10";
-    context.fillRect(0, 0, width, height);
-    renderHearth(context);
-    hearth.renderGlow(context);
-    hearth.renderLogs(context);
-    context.globalCompositeOperation = "lighter";
+    ctx.globalCompositeOperation = "source-over";
+    ctx.fillStyle = "#090b10";
+    ctx.fillRect(0, 0, width, height);
+    renderHearth(ctx);
+    hearth.renderGlow(ctx);
+    hearth.renderLogs(ctx);
+    ctx.globalCompositeOperation = "lighter";
     for (const particle of particles) {
       const t = particle.age / particle.life;
       const radius = particle.size * (1 - t) + 0.5;
-      const flame = context.createRadialGradient(particle.x, particle.y, 0, particle.x, particle.y, radius);
+      const flame = ctx.createRadialGradient(particle.x, particle.y, 0, particle.x, particle.y, radius);
       flame.addColorStop(0, `rgba(255,${Math.round(220 - 110 * t)},65,${(1 - t) * 0.85})`);
       flame.addColorStop(0.4, `rgba(255,${Math.round(125 - 75 * t)},8,${(1 - t) * 0.55})`);
       flame.addColorStop(1, "rgba(180,15,0,0)");
-      context.fillStyle = flame;
-      context.fillRect(particle.x - radius, particle.y - radius, radius * 2, radius * 2);
+      ctx.fillStyle = flame;
+      ctx.fillRect(particle.x - radius, particle.y - radius, radius * 2, radius * 2);
     }
-    context.globalCompositeOperation = "source-over";
+    ctx.globalCompositeOperation = "source-over";
   }
 
   function resize() {
