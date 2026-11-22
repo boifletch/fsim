@@ -183,6 +183,17 @@
         ctx.roundRect(-log.half - outline * 0.5, -log.r - outline * 0.5, log.half * 2 + outline, log.r * 2 + outline, log.r + outline * 0.5);
         ctx.stroke();
       }
+
+      const label = log.burning ? 'BURN' : `${Math.round(ignition * 100)}%`;
+      const fontSize = Math.max(7, log.r * 0.72);
+      ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.lineWidth = Math.max(2, fontSize * 0.22);
+      ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+      ctx.strokeText(label, 0, 0);
+      ctx.fillStyle = log.burning ? '#ffd27a' : `rgba(255,${Math.round(190 - ignition * 110)},${Math.round(170 - ignition * 150)},${0.35 + ignition * 0.55})`;
+      ctx.fillText(label, 0, 0);
       ctx.restore();
     }
     ctx.globalCompositeOperation = 'lighter';
