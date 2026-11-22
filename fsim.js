@@ -22,7 +22,7 @@
   let delta = new Float64Array(0);
 
   canvas.addEventListener("pointerdown", clicked);
-  canvas.addEventListener("pointermove", (e) => {
+  canvas.addEventListener("pointermove", e => {
     if (!drag || e.pointerId !== activePointer) return;
     drag.x = e.clientX + offsetX;
     drag.y = e.clientY + offsetY;
