@@ -9,12 +9,12 @@
   const BUCKET = CELL * 2;
   const BUCKET_RADIUS = Math.ceil(CELL_INFLUENCE / BUCKET);
   const MAX_LOG_PARTICLES = 96;
-  const MAX_PARTICLES = 5200;
+  const MAX_PARTICLES = 2600;
   const AMBIENT = 20,
     IGNITION = 290,
     BURN_TEMP = 820;
   let width = 1,
-    height = 1,
+    height = 2,
     dpr = 1,
     logs = [],
     particles = [];
