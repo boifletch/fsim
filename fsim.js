@@ -42,85 +42,10 @@
   reset();
   requestAnimationFrame(frame);
 
+  // Utilities
+
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
-  }
-
-  function clicked(e) {
-    if (activePointer !== null || e.button !== 0) return;
-    for (let i = logs.length - 1; i >= 0; i--) {
-      const log = logs[i];
-      if (
-        pointSegment(
-          e.clientX,
-          e.clientY,
-          log.x - log.ux * log.half,
-          log.y - log.uy * log.half,
-          log.x + log.ux * log.half,
-          log.y + log.uy * log.half,
-        ) >
-        log.r + 5
-      )
-        continue;
-      drag = log;
-      activePointer = e.pointerId;
-      offsetX = log.x - e.clientX;
-      offsetY = log.y - e.clientY;
-      logs.splice(i, 1);
-      logs.push(log);
-      canvas.setPointerCapture(e.pointerId);
-      canvas.classList.add("dragging");
-      return;
-    }
-    createLog(e.clientX, e.clientY, false);
-  }
-
-  function constrain(log) {
-    const ex = Math.abs(log.ux) * log.half + log.r;
-    const ey = Math.abs(log.uy) * log.half + log.r;
-    log.x = width < ex * 2 ? width / 2 : clamp(log.x, ex, width - ex);
-    log.y = height < ey * 2 ? height / 2 : clamp(log.y, ey, height - ey);
-  }
-
-  function createLog(x, y, burning) {
-    const angle = random(0, TAU);
-    const log = {
-      x,
-      y,
-      ux: Math.cos(angle),
-      uy: Math.sin(angle),
-      angle,
-      half: random(52, 96),
-      r: random(16, 24),
-      temp: AMBIENT,
-      fuel: 1,
-      burning,
-      emission: 0,
-      grain: Array.from({ length: 7 }, () => [
-        random(-0.85, 0.6),
-        random(-0.7, 0.7),
-        random(0.1, 0.7),
-      ]),
-    };
-    if (burning) {
-      log.burning = true;
-      log.temp = BURN_TEMP;
-    }
-    constrain(log);
-    logs.push(log);
-    return log;
-  }
-
-  function frame(time) {
-    const elapsed = last ? Math.min((time - last) / 1000, 0.1) : 0;
-    last = time;
-    accumulator += elapsed;
-    while (accumulator >= STEP) {
-      update(STEP);
-      accumulator -= STEP;
-    }
-    render();
-    requestAnimationFrame(frame);
   }
 
   function gap(a, b) {
@@ -170,6 +95,138 @@
     return min + Math.random() * (max - min);
   }
 
+  // Simulation / business logic
+
+  function createLog(x, y, burning) {
+    const angle = random(0, TAU);
+    const log = {
+      x,
+      y,
+      ux: Math.cos(angle),
+      uy: Math.sin(angle),
+      angle,
+      half: random(52, 96),
+      r: random(16, 24),
+      temp: AMBIENT,
+      fuel: 1,
+      burning,
+      emission: 0,
+      grain: Array.from({ length: 7 }, () => [
+        random(-0.85, 0.6),
+        random(-0.7, 0.7),
+        random(0.1, 0.7),
+      ]),
+    };
+    if (burning) {
+      log.burning = true;
+      log.temp = BURN_TEMP;
+    }
+    constrain(log);
+    logs.push(log);
+    return log;
+  }
+
+  function reset() {
+    drag = null;
+    activePointer = null;
+    canvas.classList.remove("dragging");
+    particles.length = 0;
+    logs = [];
+    createLog(width / 2, height * 0.56, true);
+    accumulator = 0;
+  }
+
+  function update(dt) {
+    if (delta.length !== logs.length) delta = new Float64Array(logs.length);
+    delta.fill(0);
+    for (let i = 0; i < logs.length; i++) {
+      for (let j = i + 1; j < logs.length; j++) {
+        const a = logs[i],
+          b = logs[j];
+        const separation = gap(a, b);
+        if (separation > 140) continue;
+        const coupling =
+          0.13 * Math.exp(-separation / 32) + (separation <= 1 ? 0.55 : 0);
+        const heat = (a.temp - b.temp) * coupling;
+        delta[i] -= heat;
+        delta[j] += heat;
+      }
+    }
+    for (let i = 0; i < logs.length; i++) {
+      const log = logs[i];
+      log.temp += (delta[i] - (log.temp - AMBIENT) * 0.075) * dt;
+      if (!log.burning && log.fuel > 0 && log.temp >= IGNITION)
+        log.burning = true;
+      if (log.burning) {
+        log.fuel = Math.max(0, log.fuel - dt / 100);
+        if (log.fuel === 0 || log.temp < 190) log.burning = false;
+        else log.temp += (BURN_TEMP - log.temp) * 1.5 * dt;
+      }
+      log.temp = Math.max(AMBIENT, log.temp);
+      if (!log.burning) continue;
+      log.emission += dt * 48;
+      while (log.emission >= 1) {
+        log.emission--;
+        if (particles.length >= MAX_PARTICLES) continue;
+        const along = random(-log.half, log.half);
+        const life = random(0.4, 1.15);
+        particles.push({
+          x: log.x + log.ux * along + random(-log.r, log.r),
+          y: log.y + log.uy * along + random(-log.r, log.r),
+          vx: random(-18, 18),
+          vy: random(-90, -35),
+          age: 0,
+          life,
+          size: random(5, 15),
+          phase: random(0, TAU),
+        });
+      }
+    }
+    for (let i = particles.length - 1; i >= 0; i--) {
+      const p = particles[i];
+      p.age += dt;
+      if (p.age >= p.life) {
+        particles[i] = particles[particles.length - 1];
+        particles.pop();
+        continue;
+      }
+      p.x += (p.vx + Math.sin(p.age * 9 + p.phase) * 14) * dt;
+      p.y += p.vy * dt;
+      p.vy -= 18 * dt;
+    }
+  }
+
+  // Input
+
+  function clicked(e) {
+    if (activePointer !== null || e.button !== 0) return;
+    for (let i = logs.length - 1; i >= 0; i--) {
+      const log = logs[i];
+      if (
+        pointSegment(
+          e.clientX,
+          e.clientY,
+          log.x - log.ux * log.half,
+          log.y - log.uy * log.half,
+          log.x + log.ux * log.half,
+          log.y + log.uy * log.half,
+        ) >
+        log.r + 5
+      )
+        continue;
+      drag = log;
+      activePointer = e.pointerId;
+      offsetX = log.x - e.clientX;
+      offsetY = log.y - e.clientY;
+      logs.splice(i, 1);
+      logs.push(log);
+      canvas.setPointerCapture(e.pointerId);
+      canvas.classList.add("dragging");
+      return;
+    }
+    createLog(e.clientX, e.clientY, false);
+  }
+
   function release(e) {
     if (e.pointerId !== activePointer) return;
     drag = null;
@@ -177,6 +234,15 @@
     canvas.classList.remove("dragging");
     if (canvas.hasPointerCapture(e.pointerId))
       canvas.releasePointerCapture(e.pointerId);
+  }
+
+  // Visual
+
+  function constrain(log) {
+    const ex = Math.abs(log.ux) * log.half + log.r;
+    const ey = Math.abs(log.uy) * log.half + log.r;
+    log.x = width < ex * 2 ? width / 2 : clamp(log.x, ex, width - ex);
+    log.y = height < ey * 2 ? height / 2 : clamp(log.y, ey, height - ey);
   }
 
   function render() {
@@ -286,16 +352,6 @@
     ctx.globalCompositeOperation = "source-over";
   }
 
-  function reset() {
-    drag = null;
-    activePointer = null;
-    canvas.classList.remove("dragging");
-    particles.length = 0;
-    logs = [];
-    createLog(width / 2, height * 0.56, true);
-    accumulator = 0;
-  }
-
   function resize() {
     width = window.innerWidth;
     height = window.innerHeight;
@@ -306,63 +362,17 @@
     for (const log of logs) constrain(log);
   }
 
-  function update(dt) {
-    if (delta.length !== logs.length) delta = new Float64Array(logs.length);
-    delta.fill(0);
-    for (let i = 0; i < logs.length; i++) {
-      for (let j = i + 1; j < logs.length; j++) {
-        const a = logs[i],
-          b = logs[j];
-        const separation = gap(a, b);
-        if (separation > 140) continue;
-        const coupling =
-          0.13 * Math.exp(-separation / 32) + (separation <= 1 ? 0.55 : 0);
-        const heat = (a.temp - b.temp) * coupling;
-        delta[i] -= heat;
-        delta[j] += heat;
-      }
+  // Main loop
+
+  function frame(time) {
+    const elapsed = last ? Math.min((time - last) / 1000, 0.1) : 0;
+    last = time;
+    accumulator += elapsed;
+    while (accumulator >= STEP) {
+      update(STEP);
+      accumulator -= STEP;
     }
-    for (let i = 0; i < logs.length; i++) {
-      const log = logs[i];
-      log.temp += (delta[i] - (log.temp - AMBIENT) * 0.075) * dt;
-      if (!log.burning && log.fuel > 0 && log.temp >= IGNITION)
-        log.burning = true;
-      if (log.burning) {
-        log.fuel = Math.max(0, log.fuel - dt / 100);
-        if (log.fuel === 0 || log.temp < 190) log.burning = false;
-        else log.temp += (BURN_TEMP - log.temp) * 1.5 * dt;
-      }
-      log.temp = Math.max(AMBIENT, log.temp);
-      if (!log.burning) continue;
-      log.emission += dt * 48;
-      while (log.emission >= 1) {
-        log.emission--;
-        if (particles.length >= MAX_PARTICLES) continue;
-        const along = random(-log.half, log.half);
-        const life = random(0.4, 1.15);
-        particles.push({
-          x: log.x + log.ux * along + random(-log.r, log.r),
-          y: log.y + log.uy * along + random(-log.r, log.r),
-          vx: random(-18, 18),
-          vy: random(-90, -35),
-          age: 0,
-          life,
-          size: random(5, 15),
-          phase: random(0, TAU),
-        });
-      }
-    }
-    for (let i = particles.length - 1; i >= 0; i--) {
-      const p = particles[i];
-      p.age += dt;
-      if (p.age >= p.life) {
-        particles[i] = particles[particles.length - 1];
-        particles.pop();
-        continue;
-      }
-      p.x += (p.vx + Math.sin(p.age * 9 + p.phase) * 14) * dt;
-      p.y += p.vy * dt;
-      p.vy -= 18 * dt;
-    }
+    render();
+    requestAnimationFrame(frame);
   }
 })();
