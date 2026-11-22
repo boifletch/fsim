@@ -321,16 +321,16 @@
 
   const hearth = new Hearth();
 
-  canvas.addEventListener("pointerdown", clicked);
+  canvas.addEventListener("pointerdown", onClicked);
   canvas.addEventListener("pointermove", event => {
     if (!drag || event.pointerId !== activePointer) return;
     drag.x = event.clientX + offsetX;
     drag.y = event.clientY + offsetY;
     drag.constrain();
   });
-  canvas.addEventListener("pointerup", release);
-  canvas.addEventListener("pointercancel", release);
-  canvas.addEventListener("lostpointercapture", release);
+  canvas.addEventListener("pointerup", onRelease);
+  canvas.addEventListener("pointercancel", onRelease);
+  canvas.addEventListener("lostpointercapture", onRelease);
   window.addEventListener("resize", resize);
   document.getElementById("reset").addEventListener("click", reset);
   document.getElementById("add-log").addEventListener("click", () => {
@@ -381,7 +381,7 @@
     }
   }
 
-  function clicked(event) {
+  function onClicked(event) {
     if (activePointer !== null || event.button !== 0) return;
     for (let index = hearth.logs.length - 1; index >= 0; index--) {
       const log = hearth.logs[index];
@@ -398,7 +398,7 @@
     }
   }
 
-  function release(event) {
+  function onRelease(event) {
     if (event.pointerId !== activePointer) return;
     drag = null;
     activePointer = null;
