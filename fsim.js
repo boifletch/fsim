@@ -119,6 +119,7 @@
   }
 
   function update(dt) {
+    for (const log of logs) log.delta.fill(0);
     buildCellIndex();
     transferHeat(dt);
     updateCells(dt);
@@ -147,7 +148,6 @@
     const position = { x: 0, y: 0 };
     for (let logIndex = 0; logIndex < logs.length; logIndex++) {
       const log = logs[logIndex];
-      log.delta.fill(0);
       for (let cellIndex = 0; cellIndex < log.count; cellIndex++) {
         const temperature = log.temp[cellIndex];
         if (temperature <= AMBIENT + 0.5) continue;
