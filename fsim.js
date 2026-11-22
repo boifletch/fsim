@@ -6,7 +6,7 @@
   const STEP = 1 / 60;
   const CELL = 40;
   const CELL_INFLUENCE = CELL * 1.6;
-  const BUCKET = 16;
+  const BUCKET = CELL * 2;
   const MAX_LOG_PARTICLES = 96;
   const MAX_PARTICLES = 5200;
   const AMBIENT = 20,
@@ -154,7 +154,6 @@
       const log = logs[logIndex];
       for (let cellIndex = 0; cellIndex < log.count; cellIndex++) {
         const temperature = log.temp[cellIndex];
-        if (temperature <= AMBIENT + 0.5) continue;
         cellWorld(log, cellIndex, position);
         const baseX = Math.floor(position.x / BUCKET);
         const baseY = Math.floor(position.y / BUCKET);
