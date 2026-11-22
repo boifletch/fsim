@@ -23,7 +23,7 @@
   const random = (a, b) => a + Math.random() * (b - a);
   const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-  canvas.addEventListener("pointerdown", drag);
+  canvas.addEventListener("pointerdown", clicked);
   canvas.addEventListener("pointermove", (e) => {
     if (!drag || e.pointerId !== activePointer) return;
     drag.x = e.clientX + offsetX;
@@ -44,6 +44,34 @@
   reset();
   requestAnimationFrame(frame);
 
+  function clicked(e) {
+    if (activePointer !== null || e.button !== 0) return;
+    for (let i = logs.length - 1; i >= 0; i--) {
+      const log = logs[i];
+      if (
+        pointSegment(
+          e.clientX,
+          e.clientY,
+          log.x - log.ux * log.half,
+          log.y - log.uy * log.half,
+          log.x + log.ux * log.half,
+          log.y + log.uy * log.half,
+        ) >
+        log.r + 5
+      )
+        continue;
+      drag = log;
+      activePointer = e.pointerId;
+      offsetX = log.x - e.clientX;
+      offsetY = log.y - e.clientY;
+      logs.splice(i, 1);
+      logs.push(log);
+      canvas.setPointerCapture(e.pointerId);
+      canvas.classList.add("dragging");
+      return;
+    }
+    createLog(e.clientX, e.clientY, false);
+  }
   function constrain(log) {
     const ex = Math.abs(log.ux) * log.half + log.r;
     const ey = Math.abs(log.uy) * log.half + log.r;
@@ -78,34 +106,6 @@
     constrain(log);
     logs.push(log);
     return log;
-  }
-  function drag(e) {
-    if (activePointer !== null || e.button !== 0) return;
-    for (let i = logs.length - 1; i >= 0; i--) {
-      const log = logs[i];
-      if (
-        pointSegment(
-          e.clientX,
-          e.clientY,
-          log.x - log.ux * log.half,
-          log.y - log.uy * log.half,
-          log.x + log.ux * log.half,
-          log.y + log.uy * log.half,
-        ) >
-        log.r + 5
-      )
-        continue;
-      drag = log;
-      activePointer = e.pointerId;
-      offsetX = log.x - e.clientX;
-      offsetY = log.y - e.clientY;
-      logs.splice(i, 1);
-      logs.push(log);
-      canvas.setPointerCapture(e.pointerId);
-      canvas.classList.add("dragging");
-      return;
-    }
-    createLog(e.clientX, e.clientY, false);
   }
   function frame(time) {
     const elapsed = last ? Math.min((time - last) / 1000, 0.1) : 0;
@@ -244,7 +244,7 @@
 
       const label =
         (log.burning ? "BURN" : `${Math.round(ignition * 100)}%`) +
-        ` / F:${log.fuel}`;
+        ` / F:${log.fuel.toFixed(2)}`;
       const fontSize = Math.max(7, log.r * 0.72);
       ctx.font = `600 ${fontSize}px system-ui, sans-serif`;
       ctx.textAlign = "center";
