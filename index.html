@@ -5,12 +5,12 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>fsim — Idle fire</title>
 <style>
-*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#090b10;color:#e7e2d9;font:14px system-ui,sans-serif}canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}canvas.dragging{cursor:grabbing}.hud{position:fixed;top:18px;left:20px;pointer-events:none;user-select:none}h1{font-size:20px;margin:0 0 5px}p{margin:0;color:#aaa;line-height:1.6}.stats{margin-top:10px;font-size:18px;font-weight:600}.stats span{display:block;color:#e7e2d9}.stats small{display:block;font-weight:400;color:#aaa;font-size:12px}.controls{display:flex;gap:8px}button{pointer-events:auto;margin-top:12px;border:1px solid #555;border-radius:6px;padding:7px 13px;background:#191b22;color:inherit;cursor:pointer}
+*{box-sizing:border-box}html,body{width:100%;height:100%;margin:0;overflow:hidden;background:#090b10;color:#e7e2d9;font:14px system-ui,sans-serif}canvas{display:block;width:100%;height:100%;touch-action:none;cursor:grab}canvas.dragging{cursor:grabbing}.hud{position:fixed;top:14px;left:16px;right:16px;pointer-events:none;user-select:none}h1{font-size:18px;margin:0 0 4px}p{margin:0;color:#aaa;line-height:1.45;font-size:12px}.stats{margin-top:8px;display:flex;flex-wrap:wrap;gap:14px;font-size:16px;font-weight:600}.stat span{display:block;color:#e7e2d9}.stat small{display:block;font-weight:400;color:#aaa;font-size:11px}.controls{display:flex;gap:8px;margin-top:10px}button{pointer-events:auto;border:1px solid #555;border-radius:6px;padding:7px 12px;background:#191b22;color:inherit;cursor:pointer;font-size:13px}
 </style>
 <script src="fsim.js" defer></script>
 </head>
 <body>
 <canvas id="fire" aria-label="Interactive fire simulation. Drag logs to move them."></canvas>
-<div class="hud"><h1>fsim</h1><p>Drag logs together to feed the fire.<br>Orange = burning · darker = charred</p><div class="stats"><span id="score">0</span><small>accumulated</small><span id="income">1.8 / sec</span><small>income</small></div><div class="controls"><button id="add-log" type="button">Add log</button><button id="reset" type="button">Reset fire</button></div></div>
+<div class="hud"><h1>fsim</h1><p>Drag logs together to feed the fire.</p><div class="stats"><div class="stat"><span id="score">0</span><small>score</small></div><div class="stat"><span id="income">1.80 / sec</span><small>income</small></div><div class="stat"><span id="inventory">5 / 5</span><small>temp logs available</small></div></div><div class="controls"><button id="add-log" type="button">Add log</button><button id="reset" type="button">Reset fire</button></div></div>
 </body>
 </html>
