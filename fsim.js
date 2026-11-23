@@ -23,6 +23,7 @@
   const GRAVITY = 1100;
   const RESTITUTION = 0.25;
   const ANGULAR_DAMPING = 1.5;
+  const MAX_ANGULAR_VELOCITY = 12;
   let width = 1;
   let height = 1;
   let dpr = 1;
@@ -87,12 +88,16 @@
       return true;
     }
 
-    get radius() {
-      return (this.halfW + this.halfH) * 0.4;
-    }
-
     get momentOfInertia() {
       return (this.halfW * this.halfW + this.halfH * this.halfH) * 0.08;
+    }
+
+    get invMass() {
+      return this.isStatic || this.isDragged ? 0 : 1;
+    }
+
+    get invInertia() {
+      return this.isStatic || this.isDragged ? 0 : 1 / this.momentOfInertia;
     }
 
     recharge() {
@@ -137,6 +142,13 @@
       return (
         Math.abs(localX) <= this.halfW + margin &&
         Math.abs(localY) <= this.halfH + margin
+      );
+    }
+
+    radiusAlong(axis) {
+      return (
+        Math.abs(this.halfW * (this.ux * axis.x + this.uy * axis.y)) +
+        Math.abs(this.halfH * (-this.uy * axis.x + this.ux * axis.y))
       );
     }
 
@@ -196,11 +208,6 @@
         }
         this.temp[cell] = Math.max(AMBIENT, temperature);
       }
-      if (!this.isStatic && !this.isDragged) {
-        this.angle += this.omega * dt;
-        this.omega *= Math.max(0, 1 - ANGULAR_DAMPING * dt);
-        this.updateBasis();
-      }
     }
 
     updatePhysics(dt, bounds) {
@@ -235,6 +242,20 @@
         this.y = bottom;
         this.vy = -Math.abs(this.vy) * RESTITUTION;
       }
+    }
+
+    integrateRotation(dt) {
+      if (this.isStatic || this.isDragged) {
+        this.omega = 0;
+        return;
+      }
+      this.omega = Math.max(
+        -MAX_ANGULAR_VELOCITY,
+        Math.min(MAX_ANGULAR_VELOCITY, this.omega),
+      );
+      this.angle += this.omega * dt;
+      this.omega *= Math.max(0, 1 - ANGULAR_DAMPING * dt);
+      this.updateBasis();
     }
 
     emit(dt) {
@@ -481,64 +502,73 @@
           const second = this.logs[b];
           const dx = second.x - first.x;
           const dy = second.y - first.y;
-          const distance = Math.hypot(dx, dy) || 0.001;
-          const minimumDistance = first.radius + second.radius;
-          if (distance >= minimumDistance) continue;
-          const nx = dx / distance;
-          const ny = dy / distance;
-          const overlap = minimumDistance - distance;
-          const firstMovable = !first.isDragged && !first.isStatic;
-          const secondMovable = !second.isDragged && !second.isStatic;
-          if (firstMovable && secondMovable) {
-            first.x -= nx * overlap * 0.5;
-            first.y -= ny * overlap * 0.5;
-            second.x += nx * overlap * 0.5;
-            second.y += ny * overlap * 0.5;
-          } else if (firstMovable) {
-            first.x -= nx * overlap;
-            first.y -= ny * overlap;
-          } else if (secondMovable) {
-            second.x += nx * overlap;
-            second.y += ny * overlap;
+          const axes = [
+            { x: first.ux, y: first.uy },
+            { x: -first.uy, y: first.ux },
+            { x: second.ux, y: second.uy },
+            { x: -second.uy, y: second.ux },
+          ];
+          let smallestOverlap = Number.POSITIVE_INFINITY;
+          let normal = axes[0];
+          for (const axis of axes) {
+            const projection = dx * axis.x + dy * axis.y;
+            const overlap =
+              first.radiusAlong(axis) + second.radiusAlong(axis) -
+              Math.abs(projection);
+            if (overlap <= 0) {
+              smallestOverlap = -1;
+              break;
+            }
+            if (overlap < smallestOverlap) {
+              smallestOverlap = overlap;
+              normal = projection < 0
+                ? { x: -axis.x, y: -axis.y }
+                : { x: axis.x, y: axis.y };
+            }
           }
-          const relativeVelocity =
-            (second.vx - first.vx) * nx + (second.vy - first.vy) * ny;
-          if (relativeVelocity >= 0) continue;
-          const impulse = (-(1 + RESTITUTION) * relativeVelocity) / 2;
-          const contactX = (first.x + second.x) / 2;
-          const contactY = (first.y + second.y) / 2;
-          if (firstMovable && secondMovable) {
-            first.vx -= impulse * nx;
-            first.vy -= impulse * ny;
-            second.vx += impulse * nx;
-            second.vy += impulse * ny;
-            const firstRX = contactX - first.x;
-            const firstRY = contactY - first.y;
-            const secondRX = contactX - second.x;
-            const secondRY = contactY - second.y;
-            first.omega -=
-              (firstRX * impulse * ny - firstRY * impulse * nx) /
-              first.momentOfInertia;
-            second.omega +=
-              (secondRX * impulse * ny - secondRY * impulse * nx) /
-              second.momentOfInertia;
-          } else if (firstMovable) {
-            first.vx -= impulse * 2 * nx;
-            first.vy -= impulse * 2 * ny;
-            const firstRX = contactX - first.x;
-            const firstRY = contactY - first.y;
-            first.omega -=
-              (firstRX * impulse * 2 * ny - firstRY * impulse * 2 * nx) /
-              first.momentOfInertia;
-          } else if (secondMovable) {
-            second.vx += impulse * 2 * nx;
-            second.vy += impulse * 2 * ny;
-            const secondRX = contactX - second.x;
-            const secondRY = contactY - second.y;
-            second.omega +=
-              (secondRX * impulse * 2 * ny - secondRY * impulse * 2 * nx) /
-              second.momentOfInertia;
+          if (smallestOverlap <= 0) continue;
+          const totalInverseMass = first.invMass + second.invMass;
+          if (totalInverseMass > 0) {
+            const correction = smallestOverlap / totalInverseMass;
+            first.x -= normal.x * correction * first.invMass;
+            first.y -= normal.y * correction * first.invMass;
+            second.x += normal.x * correction * second.invMass;
+            second.y += normal.y * correction * second.invMass;
           }
+          const contactX =
+            first.x + normal.x * (first.radiusAlong(normal) - smallestOverlap * 0.5);
+          const contactY =
+            first.y + normal.y * (first.radiusAlong(normal) - smallestOverlap * 0.5);
+          const firstRX = contactX - first.x;
+          const firstRY = contactY - first.y;
+          const secondRX = contactX - second.x;
+          const secondRY = contactY - second.y;
+          const firstVelocityX = first.vx - first.omega * firstRY;
+          const firstVelocityY = first.vy + first.omega * firstRX;
+          const secondVelocityX = second.vx - second.omega * secondRY;
+          const secondVelocityY = second.vy + second.omega * secondRX;
+          const relativeVelocityX = secondVelocityX - firstVelocityX;
+          const relativeVelocityY = secondVelocityY - firstVelocityY;
+          const normalVelocity =
+            relativeVelocityX * normal.x + relativeVelocityY * normal.y;
+          if (normalVelocity >= 0) continue;
+          const firstCross = firstRX * normal.y - firstRY * normal.x;
+          const secondCross = secondRX * normal.y - secondRY * normal.x;
+          const denominator =
+            first.invMass +
+            second.invMass +
+            firstCross * firstCross * first.invInertia +
+            secondCross * secondCross * second.invInertia;
+          if (denominator <= 0) continue;
+          const impulse = (-(1 + RESTITUTION) * normalVelocity) / denominator;
+          const impulseX = impulse * normal.x;
+          const impulseY = impulse * normal.y;
+          first.vx -= impulseX * first.invMass;
+          first.vy -= impulseY * first.invMass;
+          first.omega -= firstCross * impulse * first.invInertia;
+          second.vx += impulseX * second.invMass;
+          second.vy += impulseY * second.invMass;
+          second.omega += secondCross * impulse * second.invInertia;
         }
       }
     }
@@ -550,6 +580,7 @@
       for (const log of this.logs) log.update(dt);
       for (const log of this.logs) log.updatePhysics(dt, this.bounds);
       this.resolveCollisions();
+      for (const log of this.logs) log.integrateRotation(dt);
       for (const log of this.logs) log.constrain(this.bounds);
 
       for (let index = this.logs.length - 1; index >= 0; index--) {
