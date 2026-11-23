@@ -24,6 +24,9 @@
   const RESTITUTION = 0.25;
   const ANGULAR_DAMPING = 1.5;
   const MAX_ANGULAR_VELOCITY = 12;
+  const ROTATION_SPEED = 3;
+  const FLOOR_FRICTION = 8;
+  const FLOOR_ROLLING_DAMPING = 3;
   let width = 1;
   let height = 1;
   let dpr = 1;
@@ -37,6 +40,7 @@
   let activePointer = null;
   let offsetX = 0;
   let offsetY = 0;
+  let rotateDirection = 0;
   let last = 0;
   let accumulator = 0;
   let frameCount = 0;
@@ -240,7 +244,13 @@
         this.vy = Math.abs(this.vy) * RESTITUTION;
       } else if (this.y > bottom) {
         this.y = bottom;
-        this.vy = -Math.abs(this.vy) * RESTITUTION;
+        if (this.vy > 0) this.vy = -this.vy * RESTITUTION;
+        const friction = -this.vx * FLOOR_FRICTION * dt;
+        this.vx += friction;
+        const contactY = extentY;
+        const torque = -contactY * friction;
+        this.omega += torque / this.momentOfInertia;
+        this.omega *= Math.max(0, 1 - FLOOR_ROLLING_DAMPING * dt);
       }
     }
 
@@ -574,6 +584,10 @@
     }
 
     update(dt) {
+      if (drag && rotateDirection !== 0) {
+        drag.angle += rotateDirection * ROTATION_SPEED * dt;
+        drag.updateBasis();
+      }
       for (const log of this.logs) log.clearDelta();
       this.buildCellIndex();
       this.transferHeat(dt);
@@ -642,6 +656,22 @@
   canvas.addEventListener("pointercancel", onRelease);
   canvas.addEventListener("lostpointercapture", onRelease);
   window.addEventListener("resize", resize);
+  window.addEventListener("keydown", event => {
+    if (event.key === "ArrowLeft") {
+      rotateDirection = -1;
+      event.preventDefault();
+    } else if (event.key === "ArrowRight") {
+      rotateDirection = 1;
+      event.preventDefault();
+    }
+  });
+  window.addEventListener("keyup", event => {
+    if (event.key === "ArrowLeft" && rotateDirection === -1) {
+      rotateDirection = 0;
+    } else if (event.key === "ArrowRight" && rotateDirection === 1) {
+      rotateDirection = 0;
+    }
+  });
   document.getElementById("reset").addEventListener("click", reset);
   document.getElementById("add-log").addEventListener("click", () => {
     hearth.addTemporaryLog();
@@ -662,6 +692,7 @@
   function reset() {
     drag = null;
     activePointer = null;
+    rotateDirection = 0;
     canvas.classList.remove("dragging");
     particles.length = 0;
     score = 0;
@@ -712,6 +743,7 @@
     if (activePointer !== null || event.button !== 0) return;
     for (let index = hearth.logs.length - 1; index >= 0; index--) {
       const log = hearth.logs[index];
+      if (log.isStatic) continue;
       if (!log.contains(event.clientX, event.clientY, 6)) continue;
       drag = log;
       drag.isDragged = true;
