@@ -4,29 +4,29 @@
   const ctx = canvas.getContext("2d", { alpha: false });
   const scoreElement = document.getElementById("score");
   const incomeElement = document.getElementById("income");
+  const fanMultiplierElement = document.getElementById("fan-multiplier");
   const inventoryElement = document.getElementById("inventory");
   const fpsElement = document.getElementById("fps");
+  const showDebugInput = document.getElementById("show-debug");
+  const baseLogOutputInput = document.getElementById("base-log-output");
+  const fanMaxMultiplierInput = document.getElementById("fan-max-multiplier");
+  const fanDecayInput = document.getElementById("fan-decay");
+  const cellBurnDecayInput = document.getElementById("cell-burn-decay");
+  const fuelConsumptionRateInput = document.getElementById("fuel-consumption-rate");
+  const fanInfluenceAreaInput = document.getElementById("fan-influence-area");
   const TAU = Math.PI * 2;
   const FPS = 60;
   const STEP = 1 / FPS;
   const CELL_INFLUENCE_MULTIPLIER = 2.5;
   const BUCKET_MULTIPLIER = 2;
-  const MAX_LOG_PARTICLES = 72;
+  const MAX_LOG_PARTICLES = 110;
   const MAX_PARTICLES = 2200;
   const MAX_HEARTH_LOGS = 8;
   const MAX_TEMP_LOGS = 5;
-  const BASE_LOG_OUTPUT = 1.8;
   const TEMP_LOG_RECHARGE_SECONDS = 20;
   const AMBIENT = 20;
   const IGNITION = 290;
   const BURN_TEMP = 820;
-  const GRAVITY = 1200;
-  const RESTITUTION = 0.08;
-  const FRICTION = 0.6;
-  const LINEAR_DAMPING = 0.12;
-  const ANGULAR_DAMPING = 1.8;
-  const MAX_ANGULAR_VELOCITY = 14;
-  const ROTATION_SPEED = 3;
   const SOLVER_ITERATIONS = 6;
   const POSITION_SLOP = 0.2;
   const POSITION_CORRECTION = 0.8;
@@ -43,20 +43,204 @@
   let activePointer = null;
   let offsetX = 0;
   let offsetY = 0;
-  let rotateDirection = 0;
   let last = 0;
   let accumulator = 0;
   let frameCount = 0;
   let fpsTime = 0;
   let cellsByBucket = new Map();
 
-  const axis = { x: 0, y: 0 };
+  let baseLogOutput = 1.8;
+  let fanMaxMultiplier = 3;
+  let fanDecayPerSecond = 3;
+  let cellBurnRateDecay = 1.5;
+  let logFuelConsumptionRate = 0.01;
+  let fanInfluenceArea = 6;
+  let showDebug = false;
+
+  const FAN_FULL_SPEED = 1400;
+
+  const toolkit = { x: 0, y: 0, width: 0, height: 0, padding: 10, labelHeight: 18 };
+  const fan = {
+    x: 0,
+    y: 0,
+    homeX: 0,
+    homeY: 0,
+    width: 0,
+    height: 0,
+    dragging: false,
+    pointerOffsetX: 0,
+    pointerOffsetY: 0,
+    lagX: 0,
+    lagY: 0,
+    lastMoveX: 0,
+    lastMoveY: 0,
+    lastTickX: 0,
+    lastTickY: 0,
+    intensity: 0,
+    strokeDir: 0,
+    strokeTravel: 0,
+    strokePeakSpeed: 0,
+  };
+
   const pointA = { x: 0, y: 0 };
-  const pointB = { x: 0, y: 0 };
-  const contactPoint = { x: 0, y: 0 };
 
   function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
+  }
+
+  function syncSettingsFromInputs() {
+    baseLogOutput = Math.max(0, Number(baseLogOutputInput.value) || 0);
+    fanMaxMultiplier = Math.max(1, Number(fanMaxMultiplierInput.value) || 1);
+    fanDecayPerSecond = Math.max(0, Number(fanDecayInput.value) || 0);
+    cellBurnRateDecay = Math.max(0, Number(cellBurnDecayInput.value) || 0);
+    logFuelConsumptionRate = Math.max(0, Number(fuelConsumptionRateInput.value) || 0);
+    fanInfluenceArea = Math.max(1, Number(fanInfluenceAreaInput.value) || 1);
+    showDebug = !!showDebugInput.checked;
+  }
+
+  function getFanMultiplier() {
+    return 1 + (fanMaxMultiplier - 1) * fan.intensity;
+  }
+
+  function layoutToolkit() {
+    fan.width = 2 * CELL;
+    fan.height = 5 * CELL;
+    toolkit.padding = Math.max(8, Math.round(CELL * 0.7));
+    toolkit.labelHeight = 18;
+    toolkit.width = Math.max(fan.width + toolkit.padding * 2, 96);
+    toolkit.height = toolkit.labelHeight + fan.height + toolkit.padding * 3;
+    toolkit.x = width - toolkit.width - 16;
+    toolkit.y = 14;
+    fan.homeX = toolkit.x + toolkit.width / 2;
+    fan.homeY = toolkit.y + toolkit.labelHeight + toolkit.padding + fan.height / 2 + 2;
+    if (!fan.dragging) {
+      fan.x = fan.homeX;
+      fan.y = fan.homeY;
+      fan.lagX = 0;
+      fan.lagY = 0;
+    }
+  }
+
+  function resetFanState() {
+    fan.dragging = false;
+    fan.pointerOffsetX = 0;
+    fan.pointerOffsetY = 0;
+    fan.lagX = 0;
+    fan.lagY = 0;
+    fan.intensity = 0;
+    fan.strokeDir = 0;
+    fan.strokeTravel = 0;
+    fan.strokePeakSpeed = 0;
+    fan.lastTickX = fan.homeX;
+    fan.lastTickY = fan.homeY;
+    fan.lastMoveX = fan.homeX;
+    fan.lastMoveY = fan.homeY;
+    fan.x = fan.homeX;
+    fan.y = fan.homeY;
+  }
+
+  function pointInFan(x, y) {
+    const halfW = fan.width / 2;
+    const halfH = fan.height / 2;
+    return (
+      x >= fan.x - halfW - 6 &&
+      x <= fan.x + halfW + 6 &&
+      y >= fan.y - halfH - 6 &&
+      y <= fan.y + halfH + 6
+    );
+  }
+
+  function fanIntersectsBounds(bounds) {
+    const halfW = fan.width / 2;
+    const halfH = fan.height / 2;
+    return !(
+      fan.x + halfW < bounds.x ||
+      fan.x - halfW > bounds.x + bounds.width ||
+      fan.y + halfH < bounds.y ||
+      fan.y - halfH > bounds.y + bounds.height
+    );
+  }
+
+  function getFanCenter() {
+    return {
+      x: fan.x + fan.width / 2,
+      y: fan.y + fan.height / 2,
+    };
+  }
+
+  function getFanInfluenceRect() {
+    const center = getFanCenter();
+    const size = fanInfluenceArea * CELL;
+    return {
+      x: center.x - size / 2,
+      y: center.y - size / 2,
+      width: size,
+      height: size,
+    };
+  }
+
+  function fanInfluenceContainsPoint(x, y) {
+    const rect = getFanInfluenceRect();
+    return (
+      x >= rect.x &&
+      x <= rect.x + rect.width &&
+      y >= rect.y &&
+      y <= rect.y + rect.height
+    );
+  }
+
+  function rectIntersectsBounds(rect, bounds) {
+    return !(
+      rect.x + rect.width < bounds.x ||
+      rect.x > bounds.x + bounds.width ||
+      rect.y + rect.height < bounds.y ||
+      rect.y > bounds.y + bounds.height
+    );
+  }
+
+  function applyFanning(dt) {
+    if (!fan.dragging) {
+      fan.intensity = Math.max(0, fan.intensity - fanDecayPerSecond * dt);
+      fan.lagX = 0;
+      fan.lagY = 0;
+      fan.lastTickX = fan.x;
+      fan.lastTickY = fan.y;
+      fan.strokeDir = 0;
+      fan.strokeTravel = 0;
+      fan.strokePeakSpeed = 0;
+      return;
+    }
+
+    fan.lagX += (0 - fan.lagX) * Math.min(1, dt * 8);
+    fan.lagY += (0 - fan.lagY) * Math.min(1, dt * 8);
+
+    const dx = fan.x - fan.lastTickX;
+    const dy = fan.y - fan.lastTickY;
+    const speed = Math.hypot(dx, dy) / Math.max(dt, 1e-4);
+    const targetIntensity = clamp(speed / FAN_FULL_SPEED, 0, 1);
+    if (targetIntensity >= fan.intensity) {
+      fan.intensity = targetIntensity;
+    } else {
+      fan.intensity = Math.max(targetIntensity, fan.intensity - fanDecayPerSecond * dt);
+    }
+
+    fan.lastTickX = fan.x;
+    fan.lastTickY = fan.y;
+
+    const influenceRect = getFanInfluenceRect();
+    const overHearth = rectIntersectsBounds(influenceRect, hearth.bounds);
+    if (!overHearth || fan.intensity <= 0) return;
+
+    const multiplier = getFanMultiplier();
+    const position = { x: 0, y: 0 };
+    for (const log of hearth.logs) {
+      for (let cell = 0; cell < log.count; cell++) {
+        log.cellWorld(cell, position);
+        if (fanInfluenceContainsPoint(position.x, position.y)) {
+          log.fanBoost[cell] = Math.max(log.fanBoost[cell], multiplier);
+        }
+      }
+    }
   }
 
   function getSupport(log, dirX, dirY, out) {
@@ -69,120 +253,41 @@
     return out;
   }
 
-  function crossScalar(rx, ry, vx, vy) {
-    return rx * vy - ry * vx;
+  function getPlacementAngle(log, bounds) {
+    if (log.type === "persistent") return log.angle;
+    const relativeX = clamp((log.x - bounds.x) / bounds.width, 0, 1);
+    if (relativeX < 0.45) return -Math.PI / 4;
+    if (relativeX > 0.55) return Math.PI / 4;
+    return 0;
   }
 
-  function applyImpulseAtPoint(body, impulseX, impulseY, px, py) {
-    if (body.invMass === 0) return;
-    body.vx += impulseX * body.invMass;
-    body.vy += impulseY * body.invMass;
-    const rx = px - body.x;
-    const ry = py - body.y;
-    body.omega += crossScalar(rx, ry, impulseX, impulseY) * body.invInertia;
-  }
-
-  function resolveContact(a, b, nx, ny, px, py, depth) {
-    const invMassSum = a.invMass + b.invMass;
+  function separateBodies(a, b, nx, ny, depth) {
+    const aMovable = !a.isStatic && !a.isDragged;
+    const bMovable = !b.isStatic && !b.isDragged;
+    const aMass = aMovable ? 1 : 0;
+    const bMass = bMovable ? 1 : 0;
+    const invMassSum = aMass + bMass;
     if (invMassSum <= 0) return;
 
     const correction = Math.max(depth - POSITION_SLOP, 0) / invMassSum * POSITION_CORRECTION;
-    if (correction > 0) {
-      a.x -= nx * correction * a.invMass;
-      a.y -= ny * correction * a.invMass;
-      b.x += nx * correction * b.invMass;
-      b.y += ny * correction * b.invMass;
+    if (correction <= 0) return;
+
+    if (aMass) {
+      a.x -= nx * correction;
+      a.y -= ny * correction;
     }
-
-    const arx = px - a.x;
-    const ary = py - a.y;
-    const brx = px - b.x;
-    const bry = py - b.y;
-    const avx = a.vx - a.omega * ary;
-    const avy = a.vy + a.omega * arx;
-    const bvx = b.vx - b.omega * bry;
-    const bvy = b.vy + b.omega * brx;
-    const rvx = bvx - avx;
-    const rvy = bvy - avy;
-    const velAlongNormal = rvx * nx + rvy * ny;
-    if (velAlongNormal > 0) return;
-
-    const arCrossN = crossScalar(arx, ary, nx, ny);
-    const brCrossN = crossScalar(brx, bry, nx, ny);
-    const invMassN = invMassSum + arCrossN * arCrossN * a.invInertia + brCrossN * brCrossN * b.invInertia;
-    if (invMassN <= 0) return;
-
-    const restitution = Math.abs(velAlongNormal) < 40 ? 0 : RESTITUTION;
-    const normalImpulse = -(1 + restitution) * velAlongNormal / invMassN;
-    applyImpulseAtPoint(a, -normalImpulse * nx, -normalImpulse * ny, px, py);
-    applyImpulseAtPoint(b, normalImpulse * nx, normalImpulse * ny, px, py);
-
-    const avx2 = a.vx - a.omega * ary;
-    const avy2 = a.vy + a.omega * arx;
-    const bvx2 = b.vx - b.omega * bry;
-    const bvy2 = b.vy + b.omega * brx;
-    const rvx2 = bvx2 - avx2;
-    const rvy2 = bvy2 - avy2;
-    let tx = rvx2 - nx * (rvx2 * nx + rvy2 * ny);
-    let ty = rvy2 - ny * (rvx2 * nx + rvy2 * ny);
-    const tangentLength = Math.hypot(tx, ty);
-    if (tangentLength < 1e-6) return;
-    tx /= tangentLength;
-    ty /= tangentLength;
-
-    const arCrossT = crossScalar(arx, ary, tx, ty);
-    const brCrossT = crossScalar(brx, bry, tx, ty);
-    const invMassT = invMassSum + arCrossT * arCrossT * a.invInertia + brCrossT * brCrossT * b.invInertia;
-    if (invMassT <= 0) return;
-
-    let tangentImpulse = -(rvx2 * tx + rvy2 * ty) / invMassT;
-    const maxFriction = Math.abs(normalImpulse) * FRICTION;
-    tangentImpulse = clamp(tangentImpulse, -maxFriction, maxFriction);
-    applyImpulseAtPoint(a, -tangentImpulse * tx, -tangentImpulse * ty, px, py);
-    applyImpulseAtPoint(b, tangentImpulse * tx, tangentImpulse * ty, px, py);
+    if (bMass) {
+      b.x += nx * correction;
+      b.y += ny * correction;
+    }
   }
 
-  function resolveBoundsContact(log, nx, ny, px, py, depth) {
+  function separateLogFromBounds(log, nx, ny, depth) {
     if (log.isStatic || log.isDragged) return;
-
     const correction = Math.max(depth - POSITION_SLOP, 0) * POSITION_CORRECTION;
-    if (correction > 0) {
-      log.x += nx * correction;
-      log.y += ny * correction;
-    }
-
-    const rx = px - log.x;
-    const ry = py - log.y;
-    const vx = log.vx - log.omega * ry;
-    const vy = log.vy + log.omega * rx;
-    const velAlongNormal = vx * nx + vy * ny;
-    if (velAlongNormal > 0) return;
-
-    const rCrossN = crossScalar(rx, ry, nx, ny);
-    const invMassN = log.invMass + rCrossN * rCrossN * log.invInertia;
-    if (invMassN <= 0) return;
-
-    const restitution = Math.abs(velAlongNormal) < 40 ? 0 : RESTITUTION;
-    const normalImpulse = -(1 + restitution) * velAlongNormal / invMassN;
-    applyImpulseAtPoint(log, normalImpulse * nx, normalImpulse * ny, px, py);
-
-    const vx2 = log.vx - log.omega * ry;
-    const vy2 = log.vy + log.omega * rx;
-    let tx = vx2 - nx * (vx2 * nx + vy2 * ny);
-    let ty = vy2 - ny * (vx2 * nx + vy2 * ny);
-    const tangentLength = Math.hypot(tx, ty);
-    if (tangentLength < 1e-6) return;
-    tx /= tangentLength;
-    ty /= tangentLength;
-
-    const rCrossT = crossScalar(rx, ry, tx, ty);
-    const invMassT = log.invMass + rCrossT * rCrossT * log.invInertia;
-    if (invMassT <= 0) return;
-
-    let tangentImpulse = -(vx2 * tx + vy2 * ty) / invMassT;
-    const maxFriction = Math.abs(normalImpulse) * FRICTION;
-    tangentImpulse = clamp(tangentImpulse, -maxFriction, maxFriction);
-    applyImpulseAtPoint(log, tangentImpulse * tx, tangentImpulse * ty, px, py);
+    if (correction <= 0) return;
+    log.x += nx * correction;
+    log.y += ny * correction;
   }
 
   function resolveLogBounds(log, bounds) {
@@ -193,16 +298,16 @@
     const bottom = bounds.y + bounds.height;
 
     getSupport(log, 0, 1, pointA);
-    if (pointA.y > bottom) resolveBoundsContact(log, 0, -1, pointA.x, pointA.y, pointA.y - bottom);
+    if (pointA.y > bottom) separateLogFromBounds(log, 0, -1, pointA.y - bottom);
 
     getSupport(log, 0, -1, pointA);
-    if (pointA.y < top) resolveBoundsContact(log, 0, 1, pointA.x, pointA.y, top - pointA.y);
+    if (pointA.y < top) separateLogFromBounds(log, 0, 1, top - pointA.y);
 
     getSupport(log, 1, 0, pointA);
-    if (pointA.x > right) resolveBoundsContact(log, -1, 0, pointA.x, pointA.y, pointA.x - right);
+    if (pointA.x > right) separateLogFromBounds(log, -1, 0, pointA.x - right);
 
     getSupport(log, -1, 0, pointA);
-    if (pointA.x < left) resolveBoundsContact(log, 1, 0, pointA.x, pointA.y, left - pointA.x);
+    if (pointA.x < left) separateLogFromBounds(log, 1, 0, left - pointA.x);
   }
 
   class Log {
@@ -221,6 +326,7 @@
       this.fuel = new Float64Array(this.count).fill(1);
       this.burning = new Uint8Array(this.count);
       this.emission = new Float64Array(this.count);
+      this.fanBoost = new Float64Array(this.count).fill(1);
       this.particleCount = 0;
       this.vx = 0;
       this.vy = 0;
@@ -240,7 +346,13 @@
     }
 
     get outputPerSecond() {
-      return BASE_LOG_OUTPUT * (this.burningCellCount / this.count);
+      let output = 0;
+      for (let cell = 0; cell < this.count; cell++) {
+        if (!this.burning[cell]) continue;
+        const burnRate = this.fanBoost ? this.fanBoost[cell] : 1;
+        output += (baseLogOutput / this.count) * burnRate;
+      }
+      return output;
     }
 
     get isDepleted() {
@@ -250,16 +362,8 @@
       return true;
     }
 
-    get momentOfInertia() {
-      return (this.halfW * this.halfW + this.halfH * this.halfH) * 0.08;
-    }
-
     get invMass() {
-      return this.isStatic || this.isDragged ? 0 : 1;
-    }
-
-    get invInertia() {
-      return this.isStatic || this.isDragged ? 0 : 1 / this.momentOfInertia;
+      return this.isStatic ? 0 : 1;
     }
 
     recharge() {
@@ -268,6 +372,7 @@
       this.fuel.fill(1);
       this.burning.fill(0);
       this.emission.fill(0);
+      this.fanBoost.fill(1);
       this.particleCount = 0;
       this.vx = 0;
       this.vy = 0;
@@ -277,6 +382,11 @@
     updateBasis() {
       this.ux = Math.cos(this.angle);
       this.uy = Math.sin(this.angle);
+    }
+
+    applyPlacementRotation(bounds) {
+      this.angle = getPlacementAngle(this, bounds);
+      this.updateBasis();
     }
 
     ignite(count = 1) {
@@ -338,14 +448,16 @@
         separation <= CELL * 0.05
           ? 1
           : 0.8 * Math.exp(-separation / (CELL * 1.5));
+      const burnRate = Math.max(this.fanBoost[thisCell] || 1, other.fanBoost[otherCell] || 1);
       const heat =
-        (this.temp[thisCell] - other.temp[otherCell]) * coupling * dt;
+        (this.temp[thisCell] - other.temp[otherCell]) * coupling * dt * burnRate;
       this.delta[thisCell] -= heat;
       other.delta[otherCell] += heat;
     }
 
     conduct(a, b, dt) {
-      const heat = (this.temp[a] - this.temp[b]) * 0.35 * dt;
+      const burnRate = Math.max(this.fanBoost[a] || 1, this.fanBoost[b] || 1);
+      const heat = (this.temp[a] - this.temp[b]) * 0.35 * dt * burnRate;
       this.delta[a] -= heat;
       this.delta[b] += heat;
     }
@@ -354,68 +466,68 @@
       for (let cell = 0; cell < this.count; cell++) {
         let temperature = this.temp[cell] + this.delta[cell];
         temperature -= (temperature - AMBIENT) * 0.075 * dt;
+        const boost = this.fanBoost ? this.fanBoost[cell] : 1;
         if (!this.burning[cell] && this.fuel[cell] > 0 && temperature >= IGNITION) {
           this.burning[cell] = 1;
         }
         if (this.burning[cell]) {
           if (this.type === "temporary") {
-            this.fuel[cell] = Math.max(0, this.fuel[cell] - dt / 100);
+            this.fuel[cell] = Math.max(0, this.fuel[cell] - dt * logFuelConsumptionRate * boost);
           }
           if (this.fuel[cell] === 0 || temperature < 190) {
             this.burning[cell] = 0;
           } else {
-            temperature += (BURN_TEMP - temperature) * 1.5 * dt;
+            temperature += (BURN_TEMP - temperature) * 1.5 * dt * boost;
           }
         }
         this.temp[cell] = Math.max(AMBIENT, temperature);
       }
     }
 
-    integratePhysics(dt) {
-      if (this.isStatic || this.isDragged) {
-        this.vx = 0;
-        this.vy = 0;
-        this.omega = 0;
-        return;
-      }
-
-      this.vy += GRAVITY * dt;
-      const linearDamping = Math.max(0, 1 - LINEAR_DAMPING * dt);
-      const angularDamping = Math.max(0, 1 - ANGULAR_DAMPING * dt);
-      this.vx *= linearDamping;
-      this.vy *= linearDamping;
-      this.omega = clamp(this.omega * angularDamping, -MAX_ANGULAR_VELOCITY, MAX_ANGULAR_VELOCITY);
-
-      this.x += this.vx * dt;
-      this.y += this.vy * dt;
-      this.angle += this.omega * dt;
-      this.updateBasis();
-    }
-
     emit(dt) {
       const position = { x: 0, y: 0 };
       for (let cell = 0; cell < this.count; cell++) {
         if (!this.burning[cell]) continue;
-        this.emission[cell] += dt * 2.2;
+        const temperature = this.temp[cell];
+        const heat = clamp((temperature - 220) / (BURN_TEMP - 220), 0, 1);
+
+        this.emission[cell] += dt * (1.3 + heat * 3.1);
         while (this.emission[cell] >= 1) {
           this.emission[cell]--;
           if (this.particleCount >= MAX_LOG_PARTICLES || particles.length >= MAX_PARTICLES) {
             continue;
           }
+
           this.cellWorld(cell, position);
-          const life = 0.35 + Math.random() * 0.65;
-          particles.push({
-            x: position.x + (Math.random() - 0.5) * CELL * 0.8,
-            y: position.y + (Math.random() - 0.5) * CELL * 0.8,
-            vx: (Math.random() - 0.5) * 36,
-            vy: -35 - Math.random() * 55,
-            age: 0,
-            life,
-            size: 3 + Math.random() * 5,
-            phase: Math.random() * TAU,
-            log: this,
-          });
-          this.particleCount++;
+          const wispCount = 1 + (heat > 0.45 ? 1 : 0) + (heat > 0.8 ? 1 : 0);
+          const wispPhase = Math.random() * TAU;
+          const wispAmp = 4 + heat * 18;
+          const wispFreq = 3 + Math.random() * 5;
+
+          for (let i = 0; i < wispCount; i++) {
+            if (this.particleCount >= MAX_LOG_PARTICLES || particles.length >= MAX_PARTICLES) break;
+
+            const spread = CELL * (0.22 + heat * 0.22);
+            const riseJitter = (Math.random() - 0.5) * (3 + heat * 5);
+            const size = (2.4 + Math.random() * 4.8) * (0.8 + heat * 1.15);
+            const life = 0.26 + heat * 0.3 + Math.random() * 0.52;
+            particles.push({
+              x: position.x + (Math.random() - 0.5) * spread * 2 + Math.cos(wispPhase + i) * heat * 1.5,
+              y: position.y + (Math.random() - 0.5) * spread,
+              vx: (Math.random() - 0.5) * (14 + heat * 22) + riseJitter,
+              vy: -(26 + heat * 62 + Math.random() * 34),
+              age: 0,
+              life,
+              size,
+              heat,
+              phase: Math.random() * TAU,
+              wispPhase,
+              wispAmp,
+              wispFreq,
+              log: this,
+            });
+            this.particleCount++;
+          }
         }
       }
     }
@@ -429,6 +541,8 @@
         const temperature = this.temp[cell];
         const hot = Math.max(0, Math.min(1, (temperature - 170) / 650));
         if (this.burning[cell]) ignited++;
+        const x = (cell % this.cols) * CELL - this.halfW;
+        const y = ((cell / this.cols) | 0) * CELL - this.halfH;
         if (this.type === "persistent") {
           const red = Math.round(205 + (162 - 205) * hot);
           const green = Math.round(205 + (60 - 205) * hot);
@@ -438,12 +552,16 @@
           const char = 1 - this.fuel[cell];
           context.fillStyle = `rgb(${Math.round(97 - char * 67 + hot * 65)},${Math.round(60 - char * 40)},${Math.round(34 - char * 23)})`;
         }
-        context.fillRect(
-          (cell % this.cols) * CELL - this.halfW,
-          ((cell / this.cols) | 0) * CELL - this.halfH,
-          CELL,
-          CELL,
-        );
+        context.fillRect(x, y, CELL, CELL);
+
+        if (showDebug && this.type !== "persistent" && this.burning[cell]) {
+          const fuel = clamp(this.fuel[cell], 0, 1);
+          const fuelHeight = CELL * fuel;
+          if (fuelHeight > 0) {
+            context.fillStyle = "rgba(70, 210, 90, 0.95)";
+            context.fillRect(x, y + CELL - fuelHeight, CELL, fuelHeight);
+          }
+        }
       }
       const ignition = ignited / this.count;
       const visibility = 4 * ignition * (1 - ignition);
@@ -552,13 +670,13 @@
       const log = this.unplacedLogs.pop();
       log.x = this.bounds.x + this.bounds.width / 2;
       log.y = this.bounds.y + this.bounds.height / 2;
-      log.angle = Math.PI / 2 - Math.random() * (Math.PI / 4);
-      log.updateBasis();
       log.vx = 0;
       log.vy = 0;
       log.omega = 0;
+      log.applyPlacementRotation(this.bounds);
       log.clampToBounds(this.bounds);
       this.logs.push(log);
+      this.resolvePlacement();
       return log;
     }
 
@@ -634,7 +752,7 @@
         const first = this.logs[a];
         for (let b = a + 1; b < this.logs.length; b++) {
           const second = this.logs[b];
-          if (first.invMass === 0 && second.invMass === 0) continue;
+          if (first.isStatic && second.isStatic) continue;
 
           const dx = second.x - first.x;
           const dy = second.y - first.y;
@@ -675,46 +793,39 @@
           }
 
           if (separated) continue;
-
-          getSupport(first, normalX, normalY, pointA);
-          getSupport(second, -normalX, -normalY, pointB);
-          contactPoint.x = (pointA.x + pointB.x) * 0.5;
-          contactPoint.y = (pointA.y + pointB.y) * 0.5;
-          resolveContact(
-            first,
-            second,
-            normalX,
-            normalY,
-            contactPoint.x,
-            contactPoint.y,
-            smallestOverlap,
-          );
+          separateBodies(first, second, normalX, normalY, smallestOverlap);
         }
       }
     }
 
-    resolvePhysics() {
+    resolvePlacement() {
       for (let iteration = 0; iteration < SOLVER_ITERATIONS; iteration++) {
         this.resolveLogCollisions();
         for (const log of this.logs) {
           resolveLogBounds(log, this.bounds);
+          log.clampToBounds(this.bounds);
         }
       }
     }
 
     update(dt) {
-      if (drag && rotateDirection !== 0) {
-        drag.angle += rotateDirection * ROTATION_SPEED * dt;
-        drag.updateBasis();
+      for (const log of this.logs) {
+        log.vx = 0;
+        log.vy = 0;
+        log.omega = 0;
+        log.clearDelta();
+        if (log.fanBoost) {
+          for (let cell = 0; cell < log.count; cell++) {
+            log.fanBoost[cell] = Math.max(1, log.fanBoost[cell] - cellBurnRateDecay * dt);
+          }
+        }
       }
 
-      for (const log of this.logs) log.clearDelta();
+      applyFanning(dt);
+
       this.buildCellIndex();
       this.transferHeat(dt);
       for (const log of this.logs) log.update(dt);
-      for (const log of this.logs) log.integratePhysics(dt);
-      this.resolvePhysics();
-      for (const log of this.logs) log.clampToBounds(this.bounds);
 
       for (let index = this.logs.length - 1; index >= 0; index--) {
         const log = this.logs[index];
@@ -766,35 +877,45 @@
 
   canvas.addEventListener("pointerdown", onClicked);
   canvas.addEventListener("pointermove", event => {
-    if (!drag || event.pointerId !== activePointer) return;
+    if (event.pointerId !== activePointer) return;
+    if (fan.dragging) {
+      const nextX = event.clientX + fan.pointerOffsetX;
+      const nextY = event.clientY + fan.pointerOffsetY;
+      const dx = nextX - fan.x;
+      const dy = nextY - fan.y;
+      fan.x = nextX;
+      fan.y = nextY;
+      fan.lagX = clamp(fan.lagX - dx * 0.45, -CELL * 4, CELL * 4);
+      fan.lagY = clamp(fan.lagY - dy * 0.18, -CELL * 2.5, CELL * 2.5);
+      return;
+    }
+    if (!drag) return;
     drag.x = event.clientX + offsetX;
     drag.y = event.clientY + offsetY;
+    drag.applyPlacementRotation(hearth.bounds);
     drag.clampToBounds(hearth.bounds);
   });
   canvas.addEventListener("pointerup", onRelease);
   canvas.addEventListener("pointercancel", onRelease);
   canvas.addEventListener("lostpointercapture", onRelease);
   window.addEventListener("resize", resize);
-  window.addEventListener("keydown", event => {
-    if (event.key === "ArrowLeft") {
-      rotateDirection = -1;
-      event.preventDefault();
-    } else if (event.key === "ArrowRight") {
-      rotateDirection = 1;
-      event.preventDefault();
-    }
-  });
-  window.addEventListener("keyup", event => {
-    if (event.key === "ArrowLeft" && rotateDirection === -1) {
-      rotateDirection = 0;
-    } else if (event.key === "ArrowRight" && rotateDirection === 1) {
-      rotateDirection = 0;
-    }
-  });
   document.getElementById("reset").addEventListener("click", reset);
   document.getElementById("add-log").addEventListener("click", () => {
     hearth.addTemporaryLog();
   });
+  for (const input of [
+    showDebugInput,
+    baseLogOutputInput,
+    fanMaxMultiplierInput,
+    fanDecayInput,
+    cellBurnDecayInput,
+    fuelConsumptionRateInput,
+    fanInfluenceAreaInput,
+  ]) {
+    input.addEventListener("input", syncSettingsFromInputs);
+    input.addEventListener("change", syncSettingsFromInputs);
+  }
+  syncSettingsFromInputs();
   document.addEventListener("visibilitychange", () => {
     last = 0;
     accumulator = 0;
@@ -811,13 +932,14 @@
   function reset() {
     drag = null;
     activePointer = null;
-    rotateDirection = 0;
     canvas.classList.remove("dragging");
     particles.length = 0;
     score = 0;
     hearth.clear();
     hearth.addPersistentLog(true);
     accumulator = 0;
+    layoutToolkit();
+    resetFanState();
   }
 
   function update(dt) {
@@ -825,6 +947,52 @@
     hearth.emit(dt);
     updateParticles(dt);
     score += hearth.incomePerSecond * dt;
+  }
+
+  function applyParticleHeat(particle, dt) {
+    const fade = 1 - particle.age / particle.life;
+    const heat = (particle.heat || 0) * fade;
+    if (heat <= 0.05) return;
+
+    const base = 26 * heat * dt;
+    for (let logIndex = 0; logIndex < hearth.logs.length; logIndex++) {
+      const log = hearth.logs[logIndex];
+      const maxReach = Math.max(log.halfW, log.halfH) + CELL * 1.5;
+      const dx = particle.x - log.x;
+      const dy = particle.y - log.y;
+      if (dx * dx + dy * dy > maxReach * maxReach) continue;
+
+      const lx = dx * log.ux + dy * log.uy;
+      const ly = -dx * log.uy + dy * log.ux;
+      const col = Math.floor((lx + log.halfW) / CELL);
+      const row = Math.floor((ly + log.halfH) / CELL);
+      if (col < 0 || col >= log.cols || row < 0 || row >= log.rows) continue;
+
+      const cell = row * log.cols + col;
+      if (log.fuel[cell] <= 0) continue;
+
+      const cellCenterX = col * CELL - log.halfW + CELL * 0.5;
+      const cellCenterY = row * CELL - log.halfH + CELL * 0.5;
+      const aboveBias = clamp((cellCenterY - ly) / CELL + 0.5, 0.4, 1.8);
+      log.temp[cell] = Math.min(BURN_TEMP * 1.05, log.temp[cell] + base * aboveBias);
+
+      if (row + 1 < log.rows) {
+        const below = cell + log.cols;
+        if (log.fuel[below] > 0) {
+          log.temp[below] = Math.min(BURN_TEMP * 1.05, log.temp[below] + base * 0.45);
+        }
+      }
+
+      if (Math.abs(lx - cellCenterX) > CELL * 0.18) {
+        const sideCol = lx < cellCenterX ? col - 1 : col + 1;
+        if (sideCol >= 0 && sideCol < log.cols) {
+          const side = row * log.cols + sideCol;
+          if (log.fuel[side] > 0) {
+            log.temp[side] = Math.min(BURN_TEMP * 1.05, log.temp[side] + base * 0.2);
+          }
+        }
+      }
+    }
   }
 
   function updateParticles(dt) {
@@ -837,15 +1005,29 @@
         particles.pop();
         continue;
       }
-      particle.x += (particle.vx + Math.sin(particle.age * 9 + particle.phase) * 14) * dt;
+
+      const t = particle.age / particle.life;
+      const heat = particle.heat || 0;
+      const wobble =
+        Math.sin(particle.age * (7 + heat * 4) + particle.phase) * (2.5 + heat * 4.5);
+      const wispSway =
+        Math.sin(particle.age * (particle.wispFreq || 4) + (particle.wispPhase || 0)) *
+        (particle.wispAmp || 0) *
+        (0.25 + (1 - t) * 0.75);
+
+      particle.x += (particle.vx + wobble + wispSway) * dt;
       particle.y += particle.vy * dt;
-      particle.vy -= 18 * dt;
+      particle.vy -= (12 + heat * 12) * dt;
+      particle.vx *= Math.max(0, 1 - (0.35 + heat * 0.15) * dt);
+
+      applyParticleHeat(particle, dt);
     }
   }
 
   function updateHud() {
     scoreElement.textContent = Math.floor(score).toLocaleString();
     incomeElement.textContent = `${hearth.incomePerSecond.toFixed(2)} / sec`;
+    fanMultiplierElement.textContent = `${getFanMultiplier().toFixed(2)}x`;
     inventoryElement.textContent = `${hearth.availableTemporaryLogs} / ${MAX_TEMP_LOGS}`;
   }
 
@@ -860,6 +1042,24 @@
 
   function onClicked(event) {
     if (activePointer !== null || event.button !== 0) return;
+
+    if (pointInFan(event.clientX, event.clientY)) {
+      fan.dragging = true;
+      activePointer = event.pointerId;
+      fan.pointerOffsetX = fan.x - event.clientX;
+      fan.pointerOffsetY = fan.y - event.clientY;
+      fan.lastMoveX = fan.x;
+      fan.lastMoveY = fan.y;
+      fan.lastTickX = fan.x;
+      fan.lastTickY = fan.y;
+      fan.strokeDir = 0;
+      fan.strokeTravel = 0;
+      fan.strokePeakSpeed = 0;
+      canvas.setPointerCapture(event.pointerId);
+      canvas.classList.add("dragging");
+      return;
+    }
+
     for (let index = hearth.logs.length - 1; index >= 0; index--) {
       const log = hearth.logs[index];
       if (log.isStatic) continue;
@@ -869,6 +1069,8 @@
       activePointer = event.pointerId;
       offsetX = log.x - event.clientX;
       offsetY = log.y - event.clientY;
+      drag.applyPlacementRotation(hearth.bounds);
+      drag.clampToBounds(hearth.bounds);
       hearth.logs.splice(index, 1);
       hearth.logs.push(log);
       canvas.setPointerCapture(event.pointerId);
@@ -879,13 +1081,31 @@
 
   function onRelease(event) {
     if (event.pointerId !== activePointer) return;
-    if (drag) {
+
+    if (fan.dragging) {
+      fan.dragging = false;
+      fan.x = fan.homeX;
+      fan.y = fan.homeY;
+      fan.lagX = 0;
+      fan.lagY = 0;
+      fan.strokeDir = 0;
+      fan.strokeTravel = 0;
+      fan.strokePeakSpeed = 0;
+      fan.lastTickX = fan.x;
+      fan.lastTickY = fan.y;
+      fan.lastMoveX = fan.x;
+      fan.lastMoveY = fan.y;
+    } else if (drag) {
       drag.isDragged = false;
       drag.vx = 0;
       drag.vy = 0;
       drag.omega = 0;
+      drag.applyPlacementRotation(hearth.bounds);
+      drag.clampToBounds(hearth.bounds);
+      hearth.resolvePlacement();
+      drag = null;
     }
-    drag = null;
+
     activePointer = null;
     canvas.classList.remove("dragging");
     if (canvas.hasPointerCapture(event.pointerId)) {
@@ -900,6 +1120,47 @@
     context.strokeRect(bounds.x, bounds.y, bounds.width, bounds.height);
   }
 
+  function renderToolkit(context) {
+    context.save();
+    context.strokeStyle = "rgba(231,226,217,0.22)";
+    context.lineWidth = 2;
+    context.strokeRect(toolkit.x, toolkit.y, toolkit.width, toolkit.height);
+    context.fillStyle = "rgba(231,226,217,0.8)";
+    context.font = "12px system-ui, sans-serif";
+    context.textAlign = "left";
+    context.textBaseline = "top";
+    context.fillText("toolkit", toolkit.x + 8, toolkit.y + 4);
+
+    if (showDebug) {
+      const influence = getFanInfluenceRect();
+      context.fillStyle = "rgba(255, 60, 60, 0.18)";
+      context.strokeStyle = "rgba(255, 60, 60, 0.55)";
+      context.lineWidth = 1.5;
+      context.fillRect(influence.x, influence.y, influence.width, influence.height);
+      context.strokeRect(influence.x, influence.y, influence.width, influence.height);
+    }
+
+    const halfW = fan.width / 2;
+    const halfH = fan.height / 2;
+    const lagMag = Math.hypot(fan.lagX, fan.lagY);
+    const elongation = Math.min(CELL * 1.4, lagMag * 0.28);
+    const topShiftX = fan.lagX;
+    const topShiftY = fan.lagY - elongation;
+
+    context.fillStyle = "#1fb7b0";
+    context.strokeStyle = "rgba(220,255,252,0.45)";
+    context.lineWidth = 1.5;
+    context.beginPath();
+    context.moveTo(fan.x - halfW, fan.y + halfH);
+    context.lineTo(fan.x + halfW, fan.y + halfH);
+    context.lineTo(fan.x + halfW + topShiftX, fan.y - halfH + topShiftY);
+    context.lineTo(fan.x - halfW + topShiftX, fan.y - halfH + topShiftY);
+    context.closePath();
+    context.fill();
+    context.stroke();
+    context.restore();
+  }
+
   function render() {
     ctx.globalCompositeOperation = "source-over";
     ctx.fillStyle = "#090b10";
@@ -910,16 +1171,29 @@
     ctx.globalCompositeOperation = "lighter";
     for (const particle of particles) {
       const t = particle.age / particle.life;
-      const radius = particle.size * (1 - t) + 0.5;
-      const flame = ctx.createRadialGradient(particle.x, particle.y, 0, particle.x, particle.y, radius);
-      flame.addColorStop(0, `rgba(255,${Math.round(220 - 110 * t)},65,${(1 - t) * 0.85})`);
-      flame.addColorStop(0.4, `rgba(255,${Math.round(125 - 75 * t)},8,${(1 - t) * 0.55})`);
-      flame.addColorStop(1, "rgba(180,15,0,0)");
+      const heat = particle.heat || 0;
+      const fade = 1 - t;
+      const radius = particle.size * (0.25 + fade * 0.95) * (0.85 + heat * 0.55);
+      const stretch = 1 + heat * 0.5 + fade * 0.2;
+      const coreGreen = Math.min(255, Math.round(210 - 95 * t + heat * 38));
+      const midGreen = Math.max(0, Math.round(120 - 80 * t + heat * 28));
+      const coreAlpha = fade * (0.7 + heat * 0.22);
+      const midAlpha = fade * (0.42 + heat * 0.2);
+
+      ctx.save();
+      ctx.translate(particle.x, particle.y);
+      ctx.scale(1, stretch);
+      const flame = ctx.createRadialGradient(0, 0, 0, 0, 0, radius);
+      flame.addColorStop(0, `rgba(255,${coreGreen},${Math.round(70 + heat * 45 - t * 20)},${coreAlpha})`);
+      flame.addColorStop(0.38, `rgba(255,${midGreen},${Math.round(18 + heat * 14)},${midAlpha})`);
+      flame.addColorStop(1, "rgba(160,20,0,0)");
       ctx.fillStyle = flame;
-      ctx.fillRect(particle.x - radius, particle.y - radius, radius * 2, radius * 2);
+      ctx.fillRect(-radius, -radius, radius * 2, radius * 2);
+      ctx.restore();
     }
     ctx.globalCompositeOperation = "source-over";
     hearth.renderDebug(ctx);
+    renderToolkit(ctx);
     updateHud();
   }
 
@@ -935,6 +1209,7 @@
     canvas.height = Math.round(height * dpr);
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     hearth.resize(width, height);
+    layoutToolkit();
   }
 
   function frame(time) {
