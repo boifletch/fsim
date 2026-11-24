@@ -9,12 +9,16 @@
   const autosaveInElement = document.getElementById("autosave-in");
   const fpsElement = document.getElementById("fps");
   const showDebugInput = document.getElementById("show-debug");
+  const showControlsInput = document.getElementById("show-controls");
+  const settingsElement = document.getElementById("settings");
   const baseLogOutputInput = document.getElementById("base-log-output");
   const fanMaxMultiplierInput = document.getElementById("fan-max-multiplier");
+  const fanIncreaseRateInput = document.getElementById("fan-increase-rate");
   const fanDecayInput = document.getElementById("fan-decay");
   const cellBurnDecayInput = document.getElementById("cell-burn-decay");
   const fuelConsumptionRateInput = document.getElementById("fuel-consumption-rate");
   const fanInfluenceAreaInput = document.getElementById("fan-influence-area");
+  const crackleChanceInput = document.getElementById("crackle-chance");
   const TAU = Math.PI * 2;
   const FPS = 60;
   const STEP = 1 / FPS;
@@ -55,10 +59,12 @@
 
   let baseLogOutput = 1.8;
   let fanMaxMultiplier = 3;
+  let fanIncreaseRate = 8;
   let fanDecayPerSecond = 3;
   let cellBurnRateDecay = 1.5;
   let logFuelConsumptionRate = 0.01;
   let fanInfluenceArea = 6;
+  let crackleChancePerSecond = 0.003;
   let showDebug = false;
 
   const FAN_FULL_SPEED = 1400;
@@ -107,14 +113,53 @@
     return Math.max(min, Math.min(max, value));
   }
 
+  const CONTROL_SETTINGS_KEY = "fsim.settings";
+  const controlInputs = [
+    baseLogOutputInput,
+    fanMaxMultiplierInput,
+    fanIncreaseRateInput,
+    fanDecayInput,
+    cellBurnDecayInput,
+    fuelConsumptionRateInput,
+    fanInfluenceAreaInput,
+    crackleChanceInput,
+  ];
+
   function syncSettingsFromInputs() {
     baseLogOutput = Math.max(0, Number(baseLogOutputInput.value) || 0);
     fanMaxMultiplier = Math.max(1, Number(fanMaxMultiplierInput.value) || 1);
+    fanIncreaseRate = Math.max(0, Number(fanIncreaseRateInput.value) || 0);
     fanDecayPerSecond = Math.max(0, Number(fanDecayInput.value) || 0);
     cellBurnRateDecay = Math.max(0, Number(cellBurnDecayInput.value) || 0);
     logFuelConsumptionRate = Math.max(0, Number(fuelConsumptionRateInput.value) || 0);
     fanInfluenceArea = Math.max(1, Number(fanInfluenceAreaInput.value) || 1);
+    crackleChancePerSecond = Math.max(0, (Number(crackleChanceInput.value) || 0) / 100);
     showDebug = !!showDebugInput.checked;
+    if (settingsElement && showControlsInput) {
+      settingsElement.style.display = showControlsInput.checked ? "flex" : "none";
+    }
+  }
+
+  function saveControlSettings() {
+    try {
+      const data = {};
+      for (const input of controlInputs) data[input.id] = input.value;
+      localStorage.setItem(CONTROL_SETTINGS_KEY, JSON.stringify(data));
+    } catch {}
+  }
+
+  function loadControlSettings() {
+    try {
+      const raw = localStorage.getItem(CONTROL_SETTINGS_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      if (!data || typeof data !== "object") return;
+      for (const input of controlInputs) {
+        if (Object.prototype.hasOwnProperty.call(data, input.id)) {
+          input.value = data[input.id];
+        }
+      }
+    } catch {}
   }
 
   function getFanMultiplier() {
@@ -338,7 +383,10 @@
     const speed = Math.hypot(dx, dy) / Math.max(dt, 1e-4);
     const targetIntensity = clamp(speed / FAN_FULL_SPEED, 0, 1);
     if (targetIntensity >= fan.intensity) {
-      fan.intensity = targetIntensity;
+      fan.intensity =
+        fanIncreaseRate <= 0
+          ? targetIntensity
+          : Math.min(targetIntensity, fan.intensity + fanIncreaseRate * dt);
     } else {
       fan.intensity = Math.max(targetIntensity, fan.intensity - fanDecayPerSecond * dt);
     }
@@ -446,6 +494,7 @@
       this.burning = new Uint8Array(this.count);
       this.emission = new Float64Array(this.count);
       this.fanBoost = new Float64Array(this.count).fill(1);
+      this.crackle = new Float64Array(this.count);
       this.particleCount = 0;
       this.vx = 0;
       this.vy = 0;
@@ -492,6 +541,7 @@
       this.burning.fill(0);
       this.emission.fill(0);
       this.fanBoost.fill(1);
+      this.crackle.fill(0);
       this.particleCount = 0;
       this.vx = 0;
       this.vy = 0;
@@ -582,6 +632,8 @@
     }
 
     update(dt) {
+      const cracklePos = { x: 0, y: 0 };
+      const crackleChance = 1 - Math.exp(-crackleChancePerSecond * dt);
       for (let cell = 0; cell < this.count; cell++) {
         let temperature = this.temp[cell] + this.delta[cell];
         temperature -= (temperature - AMBIENT) * 0.075 * dt;
@@ -600,6 +652,37 @@
           }
         }
         this.temp[cell] = Math.max(AMBIENT, temperature);
+
+        if (this.crackle) {
+          this.crackle[cell] = Math.max(0, (this.crackle[cell] || 0) - dt);
+        }
+        if (this.burning[cell] && Math.random() < crackleChance) {
+          this.crackle[cell] = 0.09;
+          this.cellWorld(cell, cracklePos);
+          const sparkCount = 2 + Math.floor(Math.random() * 3);
+          for (let i = 0; i < sparkCount; i++) {
+            if (this.particleCount >= MAX_LOG_PARTICLES || particles.length >= MAX_PARTICLES) break;
+            const angle = -Math.PI / 2 + (Math.random() - 0.5) * 1.6;
+            const speed = 35 + Math.random() * 85;
+            particles.push({
+              x: cracklePos.x + (Math.random() - 0.5) * CELL * 0.5,
+              y: cracklePos.y + (Math.random() - 0.5) * CELL * 0.35,
+              vx: Math.cos(angle) * speed + (Math.random() - 0.5) * 20,
+              vy: Math.sin(angle) * speed - 20 - Math.random() * 30,
+              age: 0,
+              life: 0.05 + Math.random() * 0.09,
+              size: 0.8 + Math.random() * 1.6,
+              heat: 1,
+              phase: Math.random() * TAU,
+              wispPhase: 0,
+              wispAmp: 0,
+              wispFreq: 0,
+              log: this,
+              spark: true,
+            });
+            this.particleCount++;
+          }
+        }
       }
     }
 
@@ -672,6 +755,21 @@
           context.fillStyle = `rgb(${Math.round(97 - char * 67 + hot * 65)},${Math.round(60 - char * 40)},${Math.round(34 - char * 23)})`;
         }
         context.fillRect(x, y, CELL, CELL);
+
+        if (this.crackle && this.crackle[cell] > 0) {
+          const c = clamp(this.crackle[cell] / 0.09, 0, 1);
+          if (showDebug) {
+            context.fillStyle = `rgba(255, 60, 200, ${0.22 + c * 0.6})`;
+            context.fillRect(x, y, CELL, CELL);
+            context.fillStyle = `rgba(255, 20, 170, ${c * 0.35})`;
+            context.fillRect(x + CELL * 0.15, y + CELL * 0.15, CELL * 0.7, CELL * 0.7);
+          } else {
+            context.fillStyle = `rgba(255, 245, 210, ${0.18 + c * 0.55})`;
+            context.fillRect(x, y, CELL, CELL);
+            context.fillStyle = `rgba(255, 180, 60, ${c * 0.28})`;
+            context.fillRect(x + CELL * 0.15, y + CELL * 0.15, CELL * 0.7, CELL * 0.7);
+          }
+        }
 
         if (showDebug && this.type !== "persistent" && this.burning[cell]) {
           const fuel = clamp(this.fuel[cell], 0, 1);
@@ -1071,20 +1169,32 @@
   });
   document.getElementById("extinguish").addEventListener("click", () => {
     hearth.extinguish();
+    clearAllParticles();
   });
   for (const input of [
     showDebugInput,
+    showControlsInput,
     baseLogOutputInput,
     fanMaxMultiplierInput,
+    fanIncreaseRateInput,
     fanDecayInput,
     cellBurnDecayInput,
     fuelConsumptionRateInput,
     fanInfluenceAreaInput,
+    crackleChanceInput,
   ]) {
-    input.addEventListener("input", syncSettingsFromInputs);
-    input.addEventListener("change", syncSettingsFromInputs);
+    const handler = () => {
+      syncSettingsFromInputs();
+      if (input !== showDebugInput && input !== showControlsInput) {
+        saveControlSettings();
+      }
+    };
+    input.addEventListener("input", handler);
+    input.addEventListener("change", handler);
   }
+  loadControlSettings();
   syncSettingsFromInputs();
+  saveControlSettings();
   document.addEventListener("visibilitychange", () => {
     last = 0;
     accumulator = 0;
@@ -1100,13 +1210,20 @@
     return (Math.floor(x / BUCKET) + 4096) * 8192 + (Math.floor(y / BUCKET) + 4096);
   }
 
+  function clearAllParticles() {
+    particles.length = 0;
+    lighter.particleSource.particleCount = 0;
+    for (const log of hearth.logs) {
+      log.particleCount = 0;
+    }
+  }
+
   function reset() {
     drag = null;
     activePointer = null;
     activeTool = null;
     canvas.classList.remove("dragging");
-    particles.length = 0;
-    lighter.particleSource.particleCount = 0;
+    clearAllParticles();
     score = 0;
     autosaveRemaining = AUTOSAVE_SECONDS;
     hearth.resetToDefault();
@@ -1193,8 +1310,7 @@
 
       hearth.restoreState(logs);
       score = Math.max(0, Number(state.score) || 0);
-      particles.length = 0;
-      lighter.particleSource.particleCount = 0;
+      clearAllParticles();
       drag = null;
       activePointer = null;
       activeTool = null;
@@ -1483,6 +1599,26 @@
       const t = particle.age / particle.life;
       const heat = particle.heat || 0;
       const fade = 1 - t;
+      if (particle.spark) {
+        const radius = particle.size * (0.7 + fade * 1.2);
+        const alpha = fade * 0.95;
+        ctx.save();
+        ctx.translate(particle.x, particle.y);
+        const spark = ctx.createRadialGradient(0, 0, 0, 0, 0, radius);
+        if (showDebug) {
+          spark.addColorStop(0, `rgba(255,245,255,${alpha})`);
+          spark.addColorStop(0.35, `rgba(255,80,220,${alpha * 0.95})`);
+          spark.addColorStop(1, "rgba(255,0,170,0)");
+        } else {
+          spark.addColorStop(0, `rgba(255,255,235,${alpha})`);
+          spark.addColorStop(0.35, `rgba(255,230,120,${alpha * 0.9})`);
+          spark.addColorStop(1, "rgba(255,120,20,0)");
+        }
+        ctx.fillStyle = spark;
+        ctx.fillRect(-radius, -radius, radius * 2, radius * 2);
+        ctx.restore();
+        continue;
+      }
       const radius = particle.size * (0.25 + fade * 0.95) * (0.85 + heat * 0.55);
       const stretch = 1 + heat * 0.5 + fade * 0.2;
       const coreGreen = Math.min(255, Math.round(210 - 95 * t + heat * 38));
