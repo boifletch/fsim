@@ -6,6 +6,7 @@
   const incomeElement = document.getElementById("income");
   const fanMultiplierElement = document.getElementById("fan-multiplier");
   const inventoryElement = document.getElementById("inventory");
+  const autosaveInElement = document.getElementById("autosave-in");
   const fpsElement = document.getElementById("fps");
   const showDebugInput = document.getElementById("show-debug");
   const baseLogOutputInput = document.getElementById("base-log-output");
@@ -24,6 +25,7 @@
   const MAX_HEARTH_LOGS = 8;
   const MAX_TEMP_LOGS = 5;
   const TEMP_LOG_RECHARGE_SECONDS = 20;
+  const AUTOSAVE_SECONDS = 30;
   const AMBIENT = 20;
   const IGNITION = 290;
   const BURN_TEMP = 820;
@@ -41,12 +43,14 @@
   let particles = [];
   let drag = null;
   let activePointer = null;
+  let activeTool = null;
   let offsetX = 0;
   let offsetY = 0;
   let last = 0;
   let accumulator = 0;
   let frameCount = 0;
   let fpsTime = 0;
+  let autosaveRemaining = AUTOSAVE_SECONDS;
   let cellsByBucket = new Map();
 
   let baseLogOutput = 1.8;
@@ -82,6 +86,21 @@
     strokePeakSpeed: 0,
   };
 
+  const lighter = {
+    x: 0,
+    y: 0,
+    homeX: 0,
+    homeY: 0,
+    width: 0,
+    height: 0,
+    dragging: false,
+    pointerOffsetX: 0,
+    pointerOffsetY: 0,
+    influenceArea: 4,
+    emitAccumulator: 0,
+    particleSource: { particleCount: 0 },
+  };
+
   const pointA = { x: 0, y: 0 };
 
   function clamp(value, min, max) {
@@ -105,19 +124,34 @@
   function layoutToolkit() {
     fan.width = 2 * CELL;
     fan.height = 5 * CELL;
+    lighter.width = 1 * CELL;
+    lighter.height = 6 * CELL;
     toolkit.padding = Math.max(8, Math.round(CELL * 0.7));
     toolkit.labelHeight = 18;
-    toolkit.width = Math.max(fan.width + toolkit.padding * 2, 96);
-    toolkit.height = toolkit.labelHeight + fan.height + toolkit.padding * 3;
+    const toolGap = Math.max(10, Math.round(CELL * 0.8));
+    const toolsWidth = lighter.width + toolGap + fan.width;
+    const toolsHeight = Math.max(fan.height, lighter.height);
+    toolkit.width = Math.max(toolsWidth + toolkit.padding * 2, 120);
+    toolkit.height = toolkit.labelHeight + toolsHeight + toolkit.padding * 3;
     toolkit.x = width - toolkit.width - 16;
     toolkit.y = 14;
-    fan.homeX = toolkit.x + toolkit.width / 2;
-    fan.homeY = toolkit.y + toolkit.labelHeight + toolkit.padding + fan.height / 2 + 2;
+
+    const toolsLeft = toolkit.x + (toolkit.width - toolsWidth) / 2;
+    const toolsTop = toolkit.y + toolkit.labelHeight + toolkit.padding + 2;
+    lighter.homeX = toolsLeft + lighter.width / 2;
+    lighter.homeY = toolsTop + toolsHeight - lighter.height / 2;
+    fan.homeX = toolsLeft + lighter.width + toolGap + fan.width / 2;
+    fan.homeY = toolsTop + toolsHeight - fan.height / 2;
+
     if (!fan.dragging) {
       fan.x = fan.homeX;
       fan.y = fan.homeY;
       fan.lagX = 0;
       fan.lagY = 0;
+    }
+    if (!lighter.dragging) {
+      lighter.x = lighter.homeX;
+      lighter.y = lighter.homeY;
     }
   }
 
@@ -137,6 +171,46 @@
     fan.lastMoveY = fan.homeY;
     fan.x = fan.homeX;
     fan.y = fan.homeY;
+  }
+
+  function resetLighterState() {
+    lighter.dragging = false;
+    lighter.pointerOffsetX = 0;
+    lighter.pointerOffsetY = 0;
+    lighter.emitAccumulator = 0;
+    lighter.x = lighter.homeX;
+    lighter.y = lighter.homeY;
+  }
+
+  function pointInLighter(x, y) {
+    const halfW = lighter.width / 2;
+    const halfH = lighter.height / 2;
+    return (
+      x >= lighter.x - halfW - 6 &&
+      x <= lighter.x + halfW + 6 &&
+      y >= lighter.y - halfH - 6 &&
+      y <= lighter.y + halfH + 6
+    );
+  }
+
+  function getLighterInfluenceRect() {
+    const size = lighter.influenceArea * CELL;
+    return {
+      x: lighter.x - size / 2,
+      y: lighter.y - lighter.height / 2 - size * 0.55,
+      width: size,
+      height: size,
+    };
+  }
+
+  function lighterInfluenceContainsPoint(x, y) {
+    const rect = getLighterInfluenceRect();
+    return (
+      x >= rect.x &&
+      x <= rect.x + rect.width &&
+      y >= rect.y &&
+      y <= rect.y + rect.height
+    );
   }
 
   function pointInFan(x, y) {
@@ -159,6 +233,51 @@
       fan.y + halfH < bounds.y ||
       fan.y - halfH > bounds.y + bounds.height
     );
+  }
+
+  function applyLighter(dt) {
+    if (!lighter.dragging) {
+      lighter.emitAccumulator = 0;
+      return;
+    }
+
+    const rect = getLighterInfluenceRect();
+    if (rectIntersectsBounds(rect, hearth.bounds)) {
+      const position = { x: 0, y: 0 };
+      for (const log of hearth.logs) {
+        for (let cell = 0; cell < log.count; cell++) {
+          log.cellWorld(cell, position);
+          if (lighterInfluenceContainsPoint(position.x, position.y)) {
+            log.temp[cell] = Math.min(IGNITION, Math.max(log.temp[cell], IGNITION));
+          }
+        }
+      }
+    }
+
+    lighter.emitAccumulator += dt * 28;
+    while (lighter.emitAccumulator >= 1) {
+      lighter.emitAccumulator--;
+      if (particles.length >= MAX_PARTICLES) continue;
+      const flameX = lighter.x + (Math.random() - 0.5) * lighter.width * 0.9;
+      const flameY = lighter.y - lighter.height * 0.5 + lighter.height * (0.08 + Math.random() * 0.18);
+      const heat = 0.75 + Math.random() * 0.2;
+      particles.push({
+        x: flameX,
+        y: flameY,
+        vx: (Math.random() - 0.5) * 18,
+        vy: -(30 + Math.random() * 28),
+        age: 0,
+        life: 0.18 + Math.random() * 0.22,
+        size: 2 + Math.random() * 3,
+        heat,
+        phase: Math.random() * TAU,
+        wispPhase: Math.random() * TAU,
+        wispAmp: 2 + Math.random() * 4,
+        wispFreq: 6 + Math.random() * 4,
+        log: lighter.particleSource,
+      });
+      lighter.particleSource.particleCount++;
+    }
   }
 
   function getFanCenter() {
@@ -311,13 +430,13 @@
   }
 
   class Log {
-    constructor(type, x, y, angle, burning = false) {
+    constructor(type, x, y, angle, burning = false, cols = null, rows = null) {
       this.type = type;
       this.x = x;
       this.y = y;
       this.angle = angle;
-      this.cols = 12 + Math.floor(Math.random() * 5);
-      this.rows = 2 + Math.floor(Math.random() * 2);
+      this.cols = cols == null ? 12 + Math.floor(Math.random() * 5) : cols;
+      this.rows = rows == null ? 2 + Math.floor(Math.random() * 2) : rows;
       this.count = this.cols * this.rows;
       this.halfW = (this.cols * CELL) / 2;
       this.halfH = (this.rows * CELL) / 2;
@@ -632,6 +751,60 @@
       return income;
     }
 
+    clear() {
+      this.logs.length = 0;
+      this.unplacedLogs.length = 0;
+      this.rechargingLogs.length = 0;
+    }
+
+    createTemporaryLog() {
+      return new Log(
+        "temporary",
+        this.bounds.x + this.bounds.width / 2,
+        this.bounds.y + this.bounds.height / 2,
+        Math.PI / 2,
+      );
+    }
+
+    resetToDefault() {
+      this.clear();
+      this.addPersistentLog(true);
+      this.fillTemporaryInventory();
+    }
+
+    fillTemporaryInventory() {
+      const placedTemp = this.logs.filter(log => log.type === "temporary").length;
+      const needed = Math.max(0, MAX_TEMP_LOGS - placedTemp - this.unplacedLogs.length - this.rechargingLogs.length);
+      for (let i = 0; i < needed; i++) {
+        this.unplacedLogs.push(this.createTemporaryLog());
+      }
+    }
+
+    restoreState(logs) {
+      this.clear();
+      for (const log of logs) {
+        log.applyPlacementRotation(this.bounds);
+        log.clampToBounds(this.bounds);
+        this.logs.push(log);
+      }
+      if (!this.logs.some(log => log.type === "persistent")) {
+        this.addPersistentLog(true);
+      }
+      this.fillTemporaryInventory();
+    }
+
+    extinguish() {
+      for (const log of this.logs) {
+        for (let cell = 0; cell < log.count; cell++) {
+          log.burning[cell] = 0;
+          log.emission[cell] = 0;
+          if (log.temp[cell] >= IGNITION) {
+            log.temp[cell] = IGNITION - 1;
+          }
+        }
+      }
+    }
+
     resize(width, height) {
       const maxWidth = width * 0.92;
       const maxHeight = height * 0.68;
@@ -678,22 +851,6 @@
       this.logs.push(log);
       this.resolvePlacement();
       return log;
-    }
-
-    clear() {
-      this.logs.length = 0;
-      this.rechargingLogs.length = 0;
-      this.unplacedLogs.length = 0;
-      for (let index = 0; index < MAX_TEMP_LOGS; index++) {
-        this.unplacedLogs.push(
-          new Log(
-            "temporary",
-            this.bounds.x + this.bounds.width / 2,
-            this.bounds.y + this.bounds.height / 2,
-            Math.PI / 2,
-          ),
-        );
-      }
     }
 
     buildCellIndex() {
@@ -822,6 +979,7 @@
       }
 
       applyFanning(dt);
+      applyLighter(dt);
 
       this.buildCellIndex();
       this.transferHeat(dt);
@@ -878,7 +1036,7 @@
   canvas.addEventListener("pointerdown", onClicked);
   canvas.addEventListener("pointermove", event => {
     if (event.pointerId !== activePointer) return;
-    if (fan.dragging) {
+    if (activeTool === "fan" && fan.dragging) {
       const nextX = event.clientX + fan.pointerOffsetX;
       const nextY = event.clientY + fan.pointerOffsetY;
       const dx = nextX - fan.x;
@@ -887,6 +1045,11 @@
       fan.y = nextY;
       fan.lagX = clamp(fan.lagX - dx * 0.45, -CELL * 4, CELL * 4);
       fan.lagY = clamp(fan.lagY - dy * 0.18, -CELL * 2.5, CELL * 2.5);
+      return;
+    }
+    if (activeTool === "lighter" && lighter.dragging) {
+      lighter.x = event.clientX + lighter.pointerOffsetX;
+      lighter.y = event.clientY + lighter.pointerOffsetY;
       return;
     }
     if (!drag) return;
@@ -902,6 +1065,12 @@
   document.getElementById("reset").addEventListener("click", reset);
   document.getElementById("add-log").addEventListener("click", () => {
     hearth.addTemporaryLog();
+  });
+  document.getElementById("save").addEventListener("click", () => {
+    saveGame();
+  });
+  document.getElementById("extinguish").addEventListener("click", () => {
+    hearth.extinguish();
   });
   for (const input of [
     showDebugInput,
@@ -922,7 +1091,9 @@
   });
 
   resize();
-  reset();
+  if (!loadGame()) {
+    reset();
+  }
   requestAnimationFrame(frame);
 
   function bucketKey(x, y) {
@@ -932,14 +1103,110 @@
   function reset() {
     drag = null;
     activePointer = null;
+    activeTool = null;
     canvas.classList.remove("dragging");
     particles.length = 0;
+    lighter.particleSource.particleCount = 0;
     score = 0;
-    hearth.clear();
-    hearth.addPersistentLog(true);
+    autosaveRemaining = AUTOSAVE_SECONDS;
+    hearth.resetToDefault();
     accumulator = 0;
     layoutToolkit();
     resetFanState();
+    resetLighterState();
+  }
+
+  function serializeLog(log) {
+    return {
+      type: log.type,
+      x: log.x,
+      y: log.y,
+      angle: log.angle,
+      cols: log.cols,
+      rows: log.rows,
+      temp: Array.from(log.temp),
+      fuel: Array.from(log.fuel),
+      burning: Array.from(log.burning),
+      emission: Array.from(log.emission),
+      fanBoost: Array.from(log.fanBoost),
+    };
+  }
+
+  function restoreLog(data) {
+    const type = data.type === "persistent" ? "persistent" : "temporary";
+    const cols = Math.max(1, Number(data.cols) || 1);
+    const rows = Math.max(1, Number(data.rows) || 1);
+    const log = new Log(type, Number(data.x) || 0, Number(data.y) || 0, Number(data.angle) || 0, false, cols, rows);
+    if (Array.isArray(data.temp)) {
+      for (let i = 0; i < log.count && i < data.temp.length; i++) log.temp[i] = Number(data.temp[i]) || AMBIENT;
+    }
+    if (Array.isArray(data.fuel)) {
+      for (let i = 0; i < log.count && i < data.fuel.length; i++) log.fuel[i] = clamp(Number(data.fuel[i]) || 0, 0, 1);
+    }
+    if (Array.isArray(data.burning)) {
+      for (let i = 0; i < log.count && i < data.burning.length; i++) log.burning[i] = data.burning[i] ? 1 : 0;
+    }
+    if (Array.isArray(data.emission)) {
+      for (let i = 0; i < log.count && i < data.emission.length; i++) log.emission[i] = Math.max(0, Number(data.emission[i]) || 0);
+    }
+    if (Array.isArray(data.fanBoost)) {
+      for (let i = 0; i < log.count && i < data.fanBoost.length; i++) log.fanBoost[i] = Math.max(0, Number(data.fanBoost[i]) || 1);
+    }
+    log.vx = 0;
+    log.vy = 0;
+    log.omega = 0;
+    log.isDragged = false;
+    log.isStatic = type === "persistent";
+    log.particleCount = 0;
+    log.updateBasis();
+    return log;
+  }
+
+  function serializeGameState() {
+    return {
+      score,
+      logs: hearth.logs.map(log => JSON.stringify(serializeLog(log))),
+    };
+  }
+
+  function saveGame() {
+    try {
+      localStorage.setItem("fsim", JSON.stringify(serializeGameState()));
+      autosaveRemaining = AUTOSAVE_SECONDS;
+    } catch {}
+  }
+
+  function loadGame() {
+    try {
+      const raw = localStorage.getItem("fsim");
+      if (!raw) return false;
+      const state = JSON.parse(raw);
+      if (!state || !Array.isArray(state.logs) || state.logs.length === 0) return false;
+
+      const logs = [];
+      for (const entry of state.logs) {
+        const data = typeof entry === "string" ? JSON.parse(entry) : entry;
+        if (!data) continue;
+        logs.push(restoreLog(data));
+      }
+      if (!logs.some(log => log.type === "persistent")) return false;
+
+      hearth.restoreState(logs);
+      score = Math.max(0, Number(state.score) || 0);
+      particles.length = 0;
+      lighter.particleSource.particleCount = 0;
+      drag = null;
+      activePointer = null;
+      activeTool = null;
+      autosaveRemaining = AUTOSAVE_SECONDS;
+      accumulator = 0;
+      layoutToolkit();
+      resetFanState();
+      resetLighterState();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   function update(dt) {
@@ -947,6 +1214,11 @@
     hearth.emit(dt);
     updateParticles(dt);
     score += hearth.incomePerSecond * dt;
+    autosaveRemaining -= dt;
+    if (autosaveRemaining <= 0) {
+      saveGame();
+      autosaveRemaining = AUTOSAVE_SECONDS;
+    }
   }
 
   function applyParticleHeat(particle, dt) {
@@ -1029,6 +1301,7 @@
     incomeElement.textContent = `${hearth.incomePerSecond.toFixed(2)} / sec`;
     fanMultiplierElement.textContent = `${getFanMultiplier().toFixed(2)}x`;
     inventoryElement.textContent = `${hearth.availableTemporaryLogs} / ${MAX_TEMP_LOGS}`;
+    autosaveInElement.textContent = `${Math.max(0, Math.ceil(autosaveRemaining))}s`;
   }
 
   function updateFps(time) {
@@ -1043,7 +1316,19 @@
   function onClicked(event) {
     if (activePointer !== null || event.button !== 0) return;
 
+    if (pointInLighter(event.clientX, event.clientY)) {
+      activeTool = "lighter";
+      lighter.dragging = true;
+      activePointer = event.pointerId;
+      lighter.pointerOffsetX = lighter.x - event.clientX;
+      lighter.pointerOffsetY = lighter.y - event.clientY;
+      canvas.setPointerCapture(event.pointerId);
+      canvas.classList.add("dragging");
+      return;
+    }
+
     if (pointInFan(event.clientX, event.clientY)) {
+      activeTool = "fan";
       fan.dragging = true;
       activePointer = event.pointerId;
       fan.pointerOffsetX = fan.x - event.clientX;
@@ -1067,6 +1352,7 @@
       drag = log;
       drag.isDragged = true;
       activePointer = event.pointerId;
+      activeTool = null;
       offsetX = log.x - event.clientX;
       offsetY = log.y - event.clientY;
       drag.applyPlacementRotation(hearth.bounds);
@@ -1082,7 +1368,12 @@
   function onRelease(event) {
     if (event.pointerId !== activePointer) return;
 
-    if (fan.dragging) {
+    if (activeTool === "lighter" && lighter.dragging) {
+      lighter.dragging = false;
+      lighter.x = lighter.homeX;
+      lighter.y = lighter.homeY;
+      lighter.emitAccumulator = 0;
+    } else if (activeTool === "fan" && fan.dragging) {
       fan.dragging = false;
       fan.x = fan.homeX;
       fan.y = fan.homeY;
@@ -1107,6 +1398,7 @@
     }
 
     activePointer = null;
+    activeTool = null;
     canvas.classList.remove("dragging");
     if (canvas.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
@@ -1132,13 +1424,31 @@
     context.fillText("toolkit", toolkit.x + 8, toolkit.y + 4);
 
     if (showDebug) {
-      const influence = getFanInfluenceRect();
+      const fanInfluence = getFanInfluenceRect();
       context.fillStyle = "rgba(255, 60, 60, 0.18)";
       context.strokeStyle = "rgba(255, 60, 60, 0.55)";
       context.lineWidth = 1.5;
-      context.fillRect(influence.x, influence.y, influence.width, influence.height);
-      context.strokeRect(influence.x, influence.y, influence.width, influence.height);
+      context.fillRect(fanInfluence.x, fanInfluence.y, fanInfluence.width, fanInfluence.height);
+      context.strokeRect(fanInfluence.x, fanInfluence.y, fanInfluence.width, fanInfluence.height);
+
+      const lighterInfluence = getLighterInfluenceRect();
+      context.fillStyle = "rgba(255, 140, 60, 0.16)";
+      context.strokeStyle = "rgba(255, 140, 60, 0.5)";
+      context.fillRect(lighterInfluence.x, lighterInfluence.y, lighterInfluence.width, lighterInfluence.height);
+      context.strokeRect(lighterInfluence.x, lighterInfluence.y, lighterInfluence.width, lighterInfluence.height);
     }
+
+    const lHalfW = lighter.width / 2;
+    const lHalfH = lighter.height / 2;
+    const topHeight = lighter.height * (2 / 6);
+    const bottomHeight = lighter.height - topHeight;
+    context.fillStyle = "#b8bec8";
+    context.fillRect(lighter.x - lHalfW, lighter.y - lHalfH, lighter.width, topHeight);
+    context.fillStyle = "#d64545";
+    context.fillRect(lighter.x - lHalfW, lighter.y - lHalfH + topHeight, lighter.width, bottomHeight);
+    context.strokeStyle = "rgba(20,20,20,0.35)";
+    context.lineWidth = 1;
+    context.strokeRect(lighter.x - lHalfW, lighter.y - lHalfH, lighter.width, lighter.height);
 
     const halfW = fan.width / 2;
     const halfH = fan.height / 2;
