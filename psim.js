@@ -91,6 +91,10 @@ class Environment {
   }
 
   handlePointerDown(event) {
+    if (this.activePointerId !== null || event.isPrimary === false) {
+      return;
+    }
+
     this.activePointerId = event.pointerId;
     this.canvas.setPointerCapture(event.pointerId);
     this.heatCellAt(event);
