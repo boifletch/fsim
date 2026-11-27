@@ -45,11 +45,12 @@ class Environment {
     this.elapsed = 0;
     this.activePointerId = null;
 
+    const F = this.cellSize / this.envSize;
     this.ambientTemperature = 0;
-    this.ambientDecay = (this.cellSize / this.envSize) * 0.032;
-    this.sidewaysConductivity = (this.cellSize / this.envSize) * 1.4;
-    this.upwardConductivity = (this.cellSize / this.envSize) * 6.4;
-    this.downwardConductivity = (this.cellSize / this.envSize) * 0.5;
+    this.ambientDecay = (1 - F) * 0.008;
+    this.sidewaysConductivity = (1 - F) * 0.14;
+    this.upwardConductivity = (1 - F) * 0.64;
+    this.downwardConductivity = (1 - F) * 0.05;
 
     canvas.width = envSize;
     canvas.height = envSize;
